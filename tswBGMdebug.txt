@@ -1,0 +1,21 @@
+# If you place the BGM folder elsewhere, or you rename the mp3 file(s), you can assign PATH and FILES here
+# PATH = File.join(ENV['userprofile'], 'Desktop/BGM')
+# FILES[0] = '幸運の金貨のテーマ.mp3'
+
+# By default, BGM is on after running tswBGM. By uncommenting the following line, you make `off' default, and you can turn BGM on by pressing the hotkey later
+# $BGM = false
+
+# If the program fails to automatically find the handle of the window or processthread ID of TSW, uncomment the following lines and manually assign them here, and then restart tswBGM
+# $hWnd = 0x0
+# $pID = 0
+# $tID = 0
+
+# The following lines modifies the hotkey to be Alt+F2
+MODIFIER = 1
+KEY = 113
+# Other examples
+# MODIFIER = 6; KEY = 90 # Ctrl+Shift+Z
+# MODIFIER = 0; KEY = 9 # Tab. This is dangerous and deprecated
+# And so on.
+# Cheat sheet 0=None, 1=Alt, 2=Ctrl, 4=Shift, 8=Win.
+# Virtual key codes httpsdocs.microsoft.comen-uswindowswin32inputdevvirtual-key-codes. A-Z is just their ASCII (65-90). F1-F12 is 112-123.
