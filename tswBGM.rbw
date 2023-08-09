@@ -7,10 +7,14 @@ TYPES_ADDR = [0xb8e09, 0xb8e1f, 0xb932f, 0xb9303, # [F10, x5, y0], [F10, x5, y2]
               0xb9caa, 0xba0dc, 0xba0d1] # [F40, x5, y5], [F49, x5, y2], [F25, x2, y1]
 TYPES = [4, 6, 7, 23, 81, 91] # gate, floor, trigger, fairy, skeleton c, zeno
 THIS = $Exerb ? ExerbRuntime.filepath : __FILE__
-PATH = File.join(File.dirname(THIS), 'BGM')
-FILES = ['LuckyGold.mp3', 'Block1.mp3', 'Block2.mp3', 'Block3.mp3', 'Block4.mp3', 'Block5.mp3', 'LastBattle.mp3', 'AgainstSkeletonArmy.mp3', 'AgainstVampire.mp3', 'AgainstGreatMagicMaster.mp3', 'AgainstKnightArmy.mp3', 'AgainstZeno.mp3', 'Opening.mp3', 'Ending.mp3', 'Fairy.mp3', 'Princess.mp3', 'GameOver.mp3']
+PATH = File.exist?('BGM') ? 'BGM' : File.join(File.dirname(THIS), 'BGM') # find in 2 locations: pwd; the folder of the script
+FILES = ['LuckyGold.mp3', 'Block1.mp3', 'Block2.mp3', 'Block3.mp3', 'Block4.mp3', 'Block5.mp3', 'LastBattle.mp3', 'AgainstSkeletonArmy.mp3', 'AgainstVampire.mp3', 'AgainstGreatMagicMaster.mp3', 'AgainstKnightArmy.mp3', 'AgainstZeno.mp3', 'Opening.mp3', 'Ending.mp3', 'Fairy.mp3', 'Princess.mp3', 'GameOver.mp3', 'PhantomFloor.mp3']
+
 MODIFIER = 0
 KEY = 119
+
+QUIT_INTERVAL = 0.5 # if press hotkey twice within this long (or hold the hotkey), then quit (in sec)
+TIMER_INTERVAL = 0.2 # check the TSW game status every xx sec
 
 require 'Win32API'
 class Win32API # add exception handling
@@ -101,7 +105,7 @@ def fade() # fade out current bgm
     SET_CON.call("tswBGM [pID=#{$pID}] - None")
     for i in 1..10 # fade out
       return false if MCI_EXE.call('setaudio m Volume to '+((10-i)*100).to_s).zero?
-      sleep(0.1)
+      sleep(TIMER_INTERVAL/2)
     end
     return false if MCI_EXE.call('close m').zero?
   end
@@ -126,7 +130,7 @@ def init()
       log(Time.now.strftime('[%H:%M:%S]')+" Waiting for TSW to load...\n")
       while $hWnd.zero?
         $hWnd = FIND_WIN.call(0, 0, 'TTSW10', 0)
-        sleep(0.2)
+        sleep(TIMER_INTERVAL)
       end
       $audio = FILES[0] if $BGM # the braveman is walking to save the princess...
       $firstCheck = false # we run tswBGM from the start, so no need to run first check
@@ -178,7 +182,7 @@ def mute() # stop playing wav sound
 end
 
 def wait() # pause until the player clicks "OK" or the current event is over
-  while sleep(0.2)
+  while sleep(TIMER_INTERVAL)
     READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[2]+2, $buf2, 2, $bytesRead)
     break if $buf2 == "\1\0"
   end
@@ -188,19 +192,20 @@ def wait_b() # pause until the player clicks a button
   5.times do # wait for 1s at most for the button to show
     GET_CLS.call(GET_FOC.call, $buf16, 16)
     break if $buf16[0, 7] == 'TButton'
-    sleep(0.2)
+    sleep(TIMER_INTERVAL)
   end
   loop do # check is the button disappears
     GET_CLS.call(GET_FOC.call, $buf16, 16)
     break if $buf16[0, 7] != 'TButton'
-    sleep(0.2)
+    sleep(TIMER_INTERVAL)
   end
 end
 
 def routine(floor) # routine music (non-event)
   case floor
-  when 0 then b = -1; f = FILES[0]; t = 'on 0F. '
-  when 50 then b = 6; f = FILES[6]; t = 'on 50F. '
+  when 0 then f = FILES[0]; t = 'on 0F. '
+  when 50 then f = FILES[6]; t = 'on 50F. '
+  when 44 then f = FILES[-1]; t = 'on 44F. '
   else b = (floor-1)/10+1; f = FILES[b]; t = "in Block #{b}. "
   end
   log(Time.now.strftime('[%H:%M:%S]')+' You are currently '+t) unless f == $audio
@@ -210,10 +215,10 @@ end
 def isDead() # hp<0
   READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[3], $buf4, 4, $bytesRead)
   if $buf4 == "\0\0\0\0"
-    if $audio != FILES[-1]
+    if $audio != FILES[16]
       fade
       log(Time.now.strftime('[%H:%M:%S]')+' You died in the tower! ')
-      $audio = FILES[-1]
+      $audio = FILES[16]
       play
     end
     return true
@@ -235,7 +240,7 @@ def checkHotkey() # if pressed hotkey
   PEEK_MESSAGE.call(msg, 0, 0, 0, 1)
   # 32 bit? 64 bit? 0x312 = hotkey event
   if msg[4, 4] == "\x12\x03\0\0" or msg[8, 4] == "\x12\x03\0\0" # if pressed hotkey
-    sleep(0.5)
+    sleep(QUIT_INTERVAL)
     msg = ' '*44
     PEEK_MESSAGE.call(msg, 0, 0, 0, 1)
     if msg[4, 4] == "\x12\x03\0\0" or msg[8, 4] == "\x12\x03\0\0" # if twice within 0.5s
@@ -284,7 +289,7 @@ def firstCheck(floor)
   $firstCheck = false; return 0
 end
 
-while sleep(0.2)
+while sleep(TIMER_INTERVAL)
   checkHotkey
   next unless $BGM
 
@@ -310,11 +315,12 @@ while sleep(0.2)
       next
     end
     $waitBattle = false # the battle must have ended
-    while sleep(0.2) # wait for end of use
+    while sleep(TIMER_INTERVAL) # wait for end of use
       break if isDead()
       READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[1], $buf2, 2, $bytesRead)
       READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[0], $buf4, 4, $bytesRead)
-      if ($buf4.unpack('l')[0]-1)/10 != ($floor-1)/10 # fly out of that block
+      curFloor = $buf4.unpack('l')[0]
+      if (curFloor == 50 and $floor != 50) or ($floor == 50 and curFloor != 50) or ($floor == 44 and curFloor != 44) or (curFloor-1)/10 != ($floor-1)/10 # fly out of that block
         log(Time.now.strftime('[%H:%M:%S]')+" You are using the Orb of Flying.\n") unless $audio.empty?
         fade
       end
@@ -360,7 +366,7 @@ while sleep(0.2)
         end
         READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[0], $buf4, 4, $bytesRead)
         break if $buf4.unpack('l')[0] != 24 # you load a data or fly somewhere else
-        sleep(0.2)
+        sleep(TIMER_INTERVAL)
       end
       next
     end
@@ -429,7 +435,7 @@ while sleep(0.2)
       fade; wait_b
       30.times do # wait for 6 secs at most
         break if checkSpecial == [1, 0]
-        sleep(0.2)
+        sleep(TIMER_INTERVAL)
       end
       log(Time.now.strftime('[%H:%M:%S]')+' Prologue starts! ')
       audio = FILES[12]
