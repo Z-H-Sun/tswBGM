@@ -1,493 +1,620 @@
-#encoding: ASCII-8BIT
-BASE_ADDRESS = 0x400000
-OFFSETS = [0xb8698, 0xb86b8, 0x8c5c8, 0xb8688, 0x8c5ac, 0x8c748, 0x8c584] # floor, isMoving, dialog, hp, eventFlag1, eventFlag2, coordinate
-# the event types @ certain position (0x4B8934+123*F+11*y+x+2, refer to subroutine_444490)
-TYPES_ADDR = [0xb8e09, 0xb8e1f, 0xb932f, 0xb9303, # [F10, x5, y0], [F10, x5, y2], [F20, x5, y8], [F20, x5, y4]
-              0xb94c3, 0xb95a1, 0xb9580, 0xb9cc0, # [F24, x5, y0], [F25, x5, y9], [F25, x5, y6], [F40, x5, y7]
-              0xb9caa, 0xba0dc, 0xba0d1] # [F40, x5, y5], [F49, x5, y2], [F25, x2, y1]
-TYPES = [4, 6, 7, 23, 81, 91] # gate, floor, trigger, fairy, skeleton c, zeno
-THIS = $Exerb ? ExerbRuntime.filepath : __FILE__
-PATH = File.exist?('BGM') ? 'BGM' : File.join(File.dirname(THIS), 'BGM') # find in 2 locations: pwd; the folder of the script
-FILES = ['LuckyGold.mp3', 'Block1.mp3', 'Block2.mp3', 'Block3.mp3', 'Block4.mp3', 'Block5.mp3', 'LastBattle.mp3', 'AgainstSkeletonArmy.mp3', 'AgainstVampire.mp3', 'AgainstGreatMagicMaster.mp3', 'AgainstKnightArmy.mp3', 'AgainstZeno.mp3', 'Opening.mp3', 'Ending.mp3', 'Fairy.mp3', 'Princess.mp3', 'GameOver.mp3', 'PhantomFloor.mp3']
+#!/usr/bin/env ruby
+# encoding: ASCII-8Bit
 
-MODIFIER = 0
-KEY = 119
+require 'win32/api'
+include Win32
+PeekMessage = API.new('PeekMessage', 'PLLLI', 'I', 'user32')
+SendMessage = API.new('SendMessage', 'LLLP', 'L', 'user32')
+OpenProcess = API.new('OpenProcess', 'LLL', 'L', 'kernel32')
+ReadProcessMemory = API.new('ReadProcessMemory', 'LLPLL', 'L', 'kernel32')
+WriteProcessMemory = API.new('WriteProcessMemory', 'LLPLL', 'L', 'kernel32')
+CloseHandle = API.new('CloseHandle', 'L', 'L', 'kernel32')
+GetWindowThreadProcessId = API.new('GetWindowThreadProcessId', 'LP', 'L', 'user32')
+MessageBox = API.new('MessageBoxA', 'LSSI', 'L', 'user32')
+MessageBoxW = API.new('MessageBoxW', 'LSSI', 'L', 'user32')
+IsWindow = API.new('IsWindow', 'L', 'L', 'user32')
+FindWindow = API.new('FindWindow', 'SL', 'L', 'user32')
+GetLastActivePopup = API.new('GetLastActivePopup', 'L', 'L', 'user32')
+ShowWindow = API.new('ShowWindow', 'LI', 'L', 'user32')
+EnableWindow = API.new('EnableWindow', 'LI', 'L', 'user32')
+SetForegroundWindow = API.new('SetForegroundWindow', 'L', 'L', 'user32')
+RegisterHotKey = API.new('RegisterHotKey', 'LILL', 'L', 'user32')
+UnregisterHotKey = API.new('UnregisterHotKey', 'LI', 'L', 'user32')
+MsgWaitForMultipleObjects = API.new('MsgWaitForMultipleObjects', 'LSILL', 'I', 'user32')
 
-QUIT_INTERVAL = 0.5 # if press hotkey twice within this long (or hold the hotkey), then quit (in sec)
-TIMER_INTERVAL = 0.2 # check the TSW game status every xx sec
-
-require 'Win32API'
-class Win32API # add exception handling
-  alias init initialize
-  def initialize(*argv)
-    @attr = argv
-    init(*argv)
-  end
-  def call_r(*argv) # provide more info if a win32api returns null
-    r = call(*argv)
-    return r unless r.zero?
-    err = '0x' + LST_ERR.call.to_s(16).upcase
-    case @attr[1]
-    when 'WriteProcessMemory', 'ReadProcessMemory'
-      reason = "Cannot read from / write to the TSW process. Please check if TSW V1.2 is\nrunning with pID=#{$pID} and if you have proper permissions.\n"
-    when 'OpenProcess'
-      reason = "Cannot open the TSW process for writing. Please check if\nTSW V1.2 is running with pID=#{$pID} and if you have proper\npermissions. "
-    when 'RegisterHotKey'
-      reason = "Cannot register hotkey. It might be currently occupied by\nother processes or another instance of tswBGM. Please close\nthem to avoid confliction. Default: F8 (0+ 119); current:\n(#{MODIFIER}+ #{KEY}). As an advanced option, you can manually assign\nMODIFIER and KEY in `tswBGMdebug.txt'.\n\n"
-    else
-      reason = "This is a fatal error. That is all we know. "
-    end
-    raise("Err #{err} when calling `#{@attr[1]}'@#{@attr[0]}.\n#{reason}tswBGM has stopped. Details are as follows:\n\nPrototype='#{@attr[2]}', ReturnType='#{@attr[3]}', ARGV=#{argv.inspect}")
-  end
-end
-
-MCI_EXE = Win32API.new('winmm','mciExecute','p','l')
-PEEK_MESSAGE = Win32API.new('user32','PeekMessage','pllll','l')
-SEND_MESSAGE = Win32API.new('user32', 'SendMessage', 'lllp', 'l')
-REG_HOTKEY = Win32API.new('user32', 'RegisterHotKey', 'lill', 'l')
-UNREG_HOTKEY = Win32API.new('user32', 'UnregisterHotKey', 'li', 'l')
-OPEN_PROCESS = Win32API.new('kernel32', 'OpenProcess', 'lll', 'l')
-READ_PROCESS = Win32API.new('kernel32', 'ReadProcessMemory', 'llplp', 'l')
-WRITE_PROCESS = Win32API.new('kernel32', 'WriteProcessMemory', 'llplp', 'l')
-MESSAGE_BOX = Win32API.new('user32', 'MessageBox', 'lppi', 'l')
-FIND_WIN = Win32API.new('user32', 'FindWindowEx', 'llpl', 'l')
-IS_WIN = Win32API.new('user32', 'IsWindow', 'l', 'l')
-GET_RECT = Win32API.new('user32', 'GetClientRect', 'lp', 'l')
-GET_FOC = Win32API.new('user32','GetFocus','','l')
-ATT_INPUT = Win32API.new('user32', 'AttachThreadInput', 'iii', 'i')
-GET_CLS = Win32API.new('user32', 'GetClassName', 'lpl', 'l')
-WRITE_CON = Win32API.new('kernel32', 'WriteConsole', 'lpipl', 'l')
-SET_CON = Win32API.new('kernel32', 'SetConsoleTitle', 'p', 'l')
-GET_TID = Win32API.new('kernel32', 'GetCurrentThreadId', '', 'i')
-LST_ERR = Win32API.new('kernel32', 'GetLastError', '', 'l')
-
+SW_HIDE = 0
+SW_SHOW = 4 # SHOWNOACTIVATE
+WM_SETTEXT = 0xC
+WM_GETTEXT = 0xD
+WM_COMMAND = 0x111
+WM_HOTKEY = 0x312
+IDOK = 1
+IDCANCEL = 2
+IDYES = 6
+IDNO = 7
+MB_OKCANCEL = 0x1
+MB_YESNOCANCEL = 0x3
+MB_ICONQUESTION = 0x20
+MB_ICONEXCLAMATION = 0x30
+MB_ICONASTERISK = 0x40
+MB_DEFBUTTON2 = 0x100
+MB_SETFOREGROUND = 0x10000
 PROCESS_VM_WRITE = 0x20
 PROCESS_VM_READ = 0x10
 PROCESS_VM_OPERATION = 0x8
-MB_ICONEXCLAMATION = 0x30
-MB_ICONINFORMATION = 0x40
-STD_OUTPUT_HANDLE = -11
-WM_COMMAND = 0x111
-WM_SETTEXT = 0xC
-QUIT_MENUID = 3 # The idea is to hijack the quit menu
-QUIT_ADDR = 0x63874 + BASE_ADDRESS # so once click event of that menu item is triggered, arbitrary code can be executed
-QUIT_ORIG = "\x6a\0\x66\x8B\x0D\xF0\x38\x46\0\xB2\2\xB8\xFC\x38" # original bytecode (push 0; mov cx, word ptr ds:[4638F0]; mov dl, 2;...)
-MUTE_ADDR = 0x31188 + BASE_ADDRESS # mute the midiaplayer
+PROCESS_SYNCHRONIZE = 0x100000
+POINTER_SIZE = [nil].pack('p').size
+case POINTER_SIZE
+when 4 # 32-bit ruby
+  MSG_INFO_STRUCT = 'L7'
+  HANDLE_ARRAY_STRUCT = 'L*'
+when 8 # 64-bit
+  MSG_INFO_STRUCT = 'Q4L3'
+  HANDLE_ARRAY_STRUCT = 'Q*'
+else
+  raise 'Unsupported system or ruby version (neither 32-bit or 64-bit).'
+end
+TSW_CLS_NAME = 'TTSW10'
+BASE_ADDRESS = 0x400000
+OFFSET_EDIT8 = 0x1c8 # status bar textbox at bottom
+OFFSET_HWND = 0xc0
+OFFSET_OWNER_HWND = 0x20
+TTSW_ADDR = 0x8c510 + BASE_ADDRESS
+TAPPLICATION_ADDR = 0x8a6f8 + BASE_ADDRESS
+STATUS_ADDR = 0xb8688 + BASE_ADDRESS
+STATUS_INDEX = [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 9] # floor-4; x-6; y-7
+MAP_ADDR = 0xb8934 + BASE_ADDRESS
+MIDSPEED_MENUID = 33 # The idea is to hijack the midspeed menu
+MIDSPEED_ADDR = 0x7f46d + BASE_ADDRESS # so once click event of that menu item is triggered, arbitrary code can be executed
+MIDSPEED_ORIG = 0x6F # original bytecode (call TTSW10.speedmiddle@0x47f4e0)
+$buf = "\0" * 640
+require './strings'
+module Win32
+  class API
+    def self.focusTSW()
+      ShowWindow.call($hWnd, SW_SHOW)
+      hWnd = GetLastActivePopup.call($hWndTApp) # there is a popup child
+      ShowWindow.call(hWnd, SW_SHOW) if hWnd != $hWnd
+      SetForegroundWindow.call(hWnd) # SetForegroundWindow for $hWndTApp can also achieve similar effect, but can sometimes complicate the situation, e.g., LastActivePopup will be $hWndTApp if no mouse/keyboard input afterwards
+      return hWnd
+    end
+    def self.msgbox(text, flag=MB_ICONASTERISK, api=(ansi=true; MessageBox), title=$appTitle)
+      if IsWindow.call($hWnd || 0).zero?
+        hWnd = $hWnd = 0 # if the window has gone, create a system level msgbox
+      else
+        hWnd = focusTSW()
+      end
+      title = (ansi ? 'tswBGM' : "t\0s\0w\0B\0G\0M\0\0") unless $appTitle
+      return api.call(hWnd, text, title, flag | MB_SETFOREGROUND)
+    end
+    def call_r(*argv) # provide more info if a win32api returns null
+      r = call(*argv)
+      return r if $preExitProcessed # do not throw error if ready to exit
+      if function_name == 'MsgWaitForMultipleObjects'
+        return r if r >= 0 # WAIT_FAILED = (DWORD)0xFFFFFFFF
+      else
+        return r unless r.zero?
+      end
+      err = '0x%04X' % API.last_error
+      case function_name
+      when 'OpenProcess', 'WriteProcessMemory', 'ReadProcessMemory', 'VirtualAllocEx'
+        reason = "Cannot open / read from / write to / alloc memory for the TSW process. Please check if TSW V1.2 is running with pID=#{$pID} and if you have proper permissions."
+      when 'RegisterHotKey'
+        reason = "Cannot register hotkey. It might be currently occupied by other processes or another instance of tswBGM. Please close them to avoid confliction. Default: F8 (119); current: (#{CON_MODIFIER}+ #{CON_HOTKEY}). As an advanced option, you can manually assign `CON_MODIFIER` and `CON_HOTKEY` in `#{APP_SETTINGS_FNAME}'."
+      else
+        reason = "This is a fatal error. That is all we know."
+      end
+      raise_r("Err #{err} when calling `#{effective_function_name}'@#{dll_name}.\n#{reason} tswSL has stopped. Details are as follows:\n\nPrototype='#{prototype.join('')}', ReturnType='#{return_type}', ARGV=#{argv.inspect}")
+    end
+  end
+end
+def readMemoryDWORD(address)
+  ReadProcessMemory.call_r($hPrc, address, $buf, 4, 0)
+  return $buf.unpack('l')[0]
+end
+def writeMemoryDWORD(address, dword)
+  WriteProcessMemory.call_r($hPrc, address, [dword].pack('l'), 4, 0)
+end
+def callFunc(address) # execute the subroutine at the given address
+  writeMemoryDWORD(MIDSPEED_ADDR, address-MIDSPEED_ADDR-4)
+  SendMessage.call($hWnd, WM_COMMAND, MIDSPEED_MENUID, 0)
+  writeMemoryDWORD(MIDSPEED_ADDR, MIDSPEED_ORIG) # restore
+end
+def msgboxTxtA(textIndex, flag=MB_ICONASTERISK, *argv)
+  API.msgbox(Str::StrEN::STRINGS[textIndex] % argv, flag)
+end
+def msgboxTxtW(textIndex, flag=MB_ICONASTERISK, *argv)
+  API.msgbox(Str.utf8toWChar(Str::StrCN::STRINGS[textIndex] % argv), flag, MessageBoxW)
+end
 
-Win32API.new('kernel32', 'AttachConsole', 'i', 'l').call(-1) # so that we can log verbose info in a console
-$hCon = Win32API.new('kernel32', 'GetStdHandle', 'i', 'l').call(STD_OUTPUT_HANDLE)
-$hWnd = $pID = $tID = 0
-$BGM = true
-begin
-  load('tswBGMdebug.txt')
+VirtualAllocEx = API.new('VirtualAllocEx', 'LLLLL', 'L', 'kernel32')
+VirtualFreeEx = API.new('VirtualFreeEx', 'LLLL', 'L', 'kernel32')
+GetModuleHandle = API.new('GetModuleHandle', 'I', 'L', 'kernel32')
+LoadImage = API.new('LoadImage', 'LLIIII', 'L', 'user32')
+CreateWindowEx = API.new('CreateWindowEx', 'LSSLIIIILLLL', 'L', 'user32')
+SetWindowText = API.new('SetWindowTextA', 'LS', 'L', 'user32')
+SetWindowTextW = API.new('SetWindowTextW', 'LS', 'L', 'user32')
+TranslateMessage = API.new('TranslateMessage', 'P', 'L', 'user32')
+DispatchMessage = API.new('DispatchMessage', 'P', 'L', 'user32')
+MEM_COMMIT = 0x1000
+MEM_RESERVE = 0x2000
+MEM_RELEASE = 0x8000
+PAGE_EXECUTE_READWRITE = 0x40
+QS_ALLINPUT = 0x4FF
+QS_TIMER = 0x10
+QS_ALLBUTTIMER = QS_ALLINPUT & ~QS_TIMER
+WAIT_TIMEOUT = 258
+
+LR_SHARED = 0x8000
+IMAGE_ICON = 1
+ICON_BIG = 1
+WS_POPUP = 0x80000000
+WS_CHILD = 0x40000000
+WS_VISIBLE = 0x10000000
+WS_BORDER = 0x800000
+WS_EX_LAYERED = 0x80000
+WS_EX_TOOLWINDOW = 0x80
+WS_EX_TOPMOST = 8
+SS_SUNKEN = 0x1000
+SS_NOTIFY = 0x100
+SS_ICON = 3
+SS_RIGHT = 2
+STM_SETICON = 0x170
+WM_SETICON = 0x80
+WM_LBUTTONDOWN = 0x201
+WM_MBUTTONDBLCLK = 0x209 # b/w 0x201 and 209 are mouse events
+
+MAX_PATH = 260
+
+OFFSET_PARENT = 0x4 # similar to OFFSET_OWNER (0x20) but for TTimer that is not applicable
+OFFSET_TTIMER_ENABLED = 0x20 # byte
+OFFSET_TTIMER_INTERVAL = 0x24 # dword
+OFFSET_TMEDIAPLAYER_PLAYSTATE = 0x1d5 # byte
+OFFSET_TMEDIAPLAYER_DEVICEID = 0x1e6 # word
+OFFSET_TMEDIAPLAYER5 = 0x2d8
+OFFSET_TMEDIAPLAYER6 = 0x46c
+OFFSET_TTIMER4 = 0x41c
+OFFSET_TMENUITEM_BGMON1 = 0x330
+
+BGM_SETTING_ADDR = 0x89ba2 + BASE_ADDRESS # byte
+BGM_ID_ADDR = 0xb87f0 + BASE_ADDRESS
+BGM_CHECK_ADDR = 0x7c8f8 + BASE_ADDRESS # TTSW10.soundcheck
+BGM_PLAY_ADDR = 0x7c2bc + BASE_ADDRESS # TTSW10.soundplay
+BGM_PLAY_OPEN_N_PLAY_ADDR = 0x7c6d3 + BASE_ADDRESS # place to jump to within TTSW10.soundplay
+BGM_BASENAME_ADDR = 0x7c72a + BASE_ADDRESS # e.g. b_067xgw.mig
+BGM_BASENAME_GAP = 0x1c # each separated by 0x1c bytes
+DATA_CHECK1_ADDR = 0xb8918 + BASE_ADDRESS
+DATA_CHECK2_ADDR = 0xb891c + BASE_ADDRESS
+
+TTIMER4_ONTIMER_ADDR = 0x82a98 + BASE_ADDRESS # TTSW10.timer4ontimer
+TTIMER_SETENABLED_ADDR = 0x2c454 + BASE_ADDRESS # _Unit9.TTimer.SetEnabled
+TMEDIAPLAYER_CLOSE_ADDR = 0x31188 + BASE_ADDRESS # _Unit10.TMediaPlayer.Close
+TMENUITEM_SETCHECKED_ADDR = 0x102f0 + BASE_ADDRESS # Menus.TMenuItem.SetChecked
+MCISENDCOMMAND_ADDR = 0x2f838 + BASE_ADDRESS # winmm.mciSendCommandA
+
+CLOSE_HANDLE_ADDR = 0x1228 + BASE_ADDRESS
+WRITE_FILE_ADDR = 0x1290 + BASE_ADDRESS
+
+APP_SETTINGS_FNAME = 'tswBGMdebug.txt'
+APP_ICON_ID = 1 # Icons will be shown in the GUI of this app; this defines the integer identifier of the icon resource in the executable
+CON_MODIFIER = 0
+CON_HOTKEY = 119 # F8
+BGM_DIRNAME = 'BGM' # the folder that contains the mp3 BGM files
+BGM_FADE_STEPS = 10 # fade out BGM in 10 steps; 1 means no fading out effect
+BGM_FADE_INTERVAL = 150 # each step takes 150 ms
+INTERVAL_REHOOK = 450 # the interval for rehook (in msec)
+INTERVAL_QUIT = 50 # for quit (in msec)
+INTERVAL_TSW_RECHECK = 500 # the interval for checking TSW status
+
+$BGMtakeOver = true
+
+module BGM
+  MCI_CLOSE = 0x804
+  MCI_SETAUDIO = 0x873
+  MCI_DGV_SETAUDIO_VOLUME = 0x4002
+  MCI_DGV_SETAUDIO_ITEM = 0x800000
+  MCI_DGV_SETAUDIO_VALUE = 0x1000000
+  MCI_DGV_SETAUDIO_ITEM_VALUE = MCI_DGV_SETAUDIO_ITEM | MCI_DGV_SETAUDIO_VALUE
+
+  BGM_CHECK_EXT = [ # floor; y,x of fairy; y,x,type to check (4=gate; 91=Zeno); boss battle BGM id; offset of jnz, jmp
+ [10, 2, 5, 6, 5, 4, 15, 0x12, 0x5a], [20, 4, 5, 8, 5, 4, 16, 0x12, 0x43], [25, 6, 5, 9, 5, 4, 7, 0x12, 0x2c],
+ [40, 5, 5, 7, 5, 4, 18, 0x12, 0x15], [49, 1, 5, 2, 5, 91, 19, -0x69, nil]]
+  BGM_PHANTOMFLOOR = 'b_095xgw'
+  BGM_PATCH_BYTES = [ # address, len, original bytes, patched bytes[, variable to insert into patched bytes[, if `call relative`, an additional offset parameter is provided next]]
+[0x430ef8, 9, 'Sequencer', 'MPEGVideo'], # lpstrDeviceType Sequencer=midi; MPEGVideo=mp3
+
+[0x4508a9, 1, "\x75", "\x7B"], # TTSW10.itemlive redefine TTimer4.Enabled (jne -> jnp)
+[0x4556be, 1, "\x75", "\x7B"], # TTSW10.syokidata2_1 redefine TTimer4.Enabled
+[0x4556d2, 1, "\x85", "\x8B"], # TTSW10.syokidata2_2 redefine TTimer4.Enabled
+[0x4558d9, 1, "\x85", "\x8B"], # TTSW10.syokidata2_3 redefine TTimer4.Enabled
+[0x455af1, 1, "\x75", "\x7B"], # TTSW10.syokidata2_4 redefine TTimer4.Enabled
+[0x455b40, 1, "\x75", "\x7B"], # TTSW10.syokidata2_5 redefine TTimer4.Enabled
+[0x4637f5, 1, "\x75", "\x7B"], # TTSW10.GameStart1Click redefine TTimer4.Enabled
+[0x47c2a3, 1, "\x75", "\x7B"], # TTSW10.BGMOn1Click redefine TTimer4.Enabled
+[0x480efb, 1, "\x75", "\x7B"], # TTSW10.MouseControl1Click redefine TTimer4.Enabled
+
+[0x48468e, 1, "\x85", "\x86"], # TTSW10.opening9 (ending scene) disregard BGMOn1.Checked
+[0x46b640, 1, "\x74", "\xEB"], # TTSW10.moncheck for 49F (from battle with sorcerers); disregard stopping BGM (1,6,0)
+[0x453463, 1, "\x74", "\xEB"], # TTSW10.stackwork for 11,7,0 (from opening2 (3f opening scene)); disregard playing BGM No.11 (will handle elsewhere)
+[0x47ebda, 4, "\x76\x56\xF8\xFF", '%s', :@_sub_save_excludeBGM, 4], # TTSW10.savework do not save BGM_ID into data
+[0x47ec67, 4, "\xE9\x55\xF8\xFF", '%s', :@_sub_save_excludeBGM, 4], # same above
+[TTIMER_SETENABLED_ADDR, 5, "\x3A\x50\x20\x74\x08", "\xE8%s", :@_sub_resetTTimer4, 5], # _Unit9.TTimer.SetEnabled reset TTimer4 attributes for tswBGM
+[BGM_CHECK_ADDR, 5, "\xA1\x98\x86\x4B\0", "\xE8%s", :@_sub_checkBGM_ext, 5], # TTSW10.soundcheck add more checks such as HP and boss battle
+[0x45282a, 4, "\x8E\x9A\2\0", '%s', :@_sub_instruct_playBGM, 4], # TTSW10.stackwork for 1,5,0 -> with 1,5,bgmid; call sub_instruct_playBGM instead of sub_soundplay
+[0x481f6f, 4, "\x15\xF2\xFA\xFF", '%s', :@_sub_checkOrbFlight, 4], # TTSW10.img4work; OrbOfFlight rather than always stopping BGM, check if it is necessary
+[0x44edb9, 17, "\x74\x08\xFF\5\x98\x86\x4B\0\xEB\7\x83\5\x98\x86\x4B\0\2", "\xB8\x98\x86\x4B\0\x75\2\xFF\0\xFF\0\xE8%s\x90", :@_sub_checkOrbFlight, 16], # TTSW10.Button8Click (UP); check if need to stop BGM
+[0x44ed39, 17, "\x74\x08\xFF\x0D\x98\x86\x4B\0\xEB\7\x83\x2D\x98\x86\x4B\0\2", "\xB8\x98\x86\x4B\0\x75\2\xFF\x08\xFF\x08\xE8%s\x90", :@_sub_checkOrbFlight, 16], # TTSW10.Button9Click (DOWN); check if need to stop BGM
+[0x4618a1, 17, "\x74\x08\xFF\5\x98\x86\x4B\0\xEB\7\x83\5\x98\x86\x4B\0\2", "\xB8\x98\x86\x4B\0\x75\2\xFF\0\xFF\0\xE8%s\x90", :@_sub_checkOrbFlight, 16], # TTSW10.timer3ontimer (MouseDown on TButton8); check if need to stop BGM
+[0x4618d9, 17, "\x74\x08\xFF\x0D\x98\x86\x4B\0\xEB\7\x83\x2D\x98\x86\x4B\0\2", "\xB8\x98\x86\x4B\0\x75\2\xFF\x08\xFF\x08\xE8%s\x90", :@_sub_checkOrbFlight, 16], # TTSW10.timer3ontimer (MouseDown on TButton9); check if need to stop BGM
+[0x482abb, 15, "\x83\xE8\x08\x72\x0C\x83\xE8\7\x72\x19\x83\xE8\6\x72\x26", "\x80\x3D%s\0\x75\x0A\x68\x28\x2E\x48\0\xE9", :@_isInProlog], # TTSW10.timer4ontimer_1
+[0x482aca, 25, "\xEB\x34\xBA\x5E\1\0\0\x8B\x83\x1C\4\0\0\xE8\x88\x99\xFA\xFF\xEB\x22\xBA\xFA\0\0\0", "%s\xBA\x5E\1\0\0\x83\xE8\x08\x72\x0B\x83\xE8\7\x72\2\xEB\x11\x83\xEA\x64\x90", :@_sub_timer4ontimer_real, 4], # TTSW10.timer4ontimer_2
+
+[0x46f972, 1, "\0", "\x10"], # TTSW10.ichicheck for 20F (from battle with vampire); specify BGM id=16 (see sub_instruct_playBGM)
+[0x476ead, 1, "\0", "\x13"], # TTSW10.ichicheck for 49F (from battle with sorcerers); specify BGM id=19 (see sub_instruct_playBGM)
+
+[0x463e78, 2, "\xC7\5", "\xEB\x0F"], # TTSW10.mevent for 25F (from battle with archsorcerer); disregard playing BGM No.7 (will handle elsewhere)
+[0x463f71, 2, "\xC7\5", "\xEB\x0F"], # TTSW10.mevent for 40F (from battle with knights); disregard playing BGM No.18 (will handle elsewhere)
+
+[0x444d0e, 37, "\x83\x3D\xF0\x87\x4B\0\0\x74\x1E\x33\xD2\x8B\x45\xFC\x8B\x80\xB4\1\0\0\xE8\x2D\x77\xFE\xFF\x8B\x45\xFC\x8B\x80\xD8\2\0\0\xE8\x53\xC4", "\xEB\x25\x83\x3D\xF0\x87\x4B\0\0\x74\x15\xE8\xDA\x7B\3\0\x8B\x45\xFC\x8B\x80\x1C\4\0\0\xB2\6\xE8\x26\x77\xFE\xFF\xE9\x89\x42\0\0"], # TTSW10.handan for tileID=11/12 (stairs); soundcheck and soundplay
+[0x445097, 4, "\x21\x3F\0\0", "\x75\xFC\xFF\xFF"], # TTSW10.handan for tileID=11/12 (stairs); jump to 444d0e
+
+[0x430f83, 37, "\x89\x86\xDC\1\0\0\x80\xBE\xE2\1\0\0\0\x74\x1C\x80\xBE\xE0\1\0\0\0\x74\x0A\xC7\x86\xDC\1\0\0\2\0\0\0\xC6\x86\xE2", "\xB0\2\x89\x86\xDC\1\0\0\x8B\x46\4\x3B\xB0\xD8\2\0\0\x75\x22\xC7\x45\xF8%s\x66\x81\x8E\xDC\1\0\0\0\2\xEB\x10", :@_bgm_filename], # TMediaPlayer.Open
+[TMEDIAPLAYER_CLOSE_ADDR, 49, "\x53\x56\x51\x8B\xD8\x66\x83\xBB\xE6\1\0\0\0\x0F\x84\xAD\0\0\0\x33\xC0\x89\x83\xDC\1\0\0\x80\xBB\xE2\1\0\0\0\x74\x1C\x80\xBB\xE0\1\0\0\0\x74\x0A\xC7\x83\xDC\1", "\x8B\x50\4\x3B\x82\xD8\2\0\0\x75\x15\x8B\x82\x1C\4\0\0\xB2\6\xC6\5\xF0\x87\x4B\0\xFF\xE8\xAD\xB2\xFF\xFF\xC3\x66\x83\xB8\xE6\1\0\0\0\x74\xF5\x53\x56\x51\x8B\xD8\xEB\x0F"], # TMediaPlayer.Close
+[0x4312cb, 32, "\x80\xBB\xE2\1\0\0\0\x74\x17\x80\xBB\xE0\1\0\0\0\x74\7\x83\x8B\xDC\1\0\0\2\xC6\x83\xE2\1\0\0\0", "\x8B\x43\4\x3B\x98\xD8\2\0\0\x75\x0A\x81\x8B\xDC\1\0\0\0\0\1\0\x3B\x98\x64\4\0\0\x74\x0C\x90\x90\x90"], # TMediaPlayer.Play
+
+[BGM_PLAY_ADDR, 13, "\x55\x8B\xEC\x6A\0\x53\x56\x57\x8B\xD8\x33\xC0\x55", "\x8B\x80\x1C\4\0\0\xB2\6\xE9\x8B\1\xFB\xFF"], # TTSW10.soundplay
+[0x47c960, 20, "\xC7\5\xF0\x87\x4B\0\x09\0\0\0\xC3\xC7\5\xF0\x87\x4B\0\x0A\0\0", "\x83\xC0\6\x74\3\xB0\xF3\x90\4\x0C\x90\4\x0A\x0F\xB6\xC0\xA3\xF0\x87\x4B"], # TTSW10.soundcheck
+
+# battle w Skeletons
+[0x46754c, 60, "\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\4\0\0\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\x0A\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2", "\x31\xD2\x83\x3D\xF0\x87\x4B\0\0\x74\x1D\x83\3\2\x83\xC0\6\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\4\x46\1\0\5\0\x66\xC7\x44\x46\4\x0C\0\x83\3\2\x83\xC0\6\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\4\x46\x0A\0"], # TTSW10.moncheck
+[0x46f2e3, 60, "\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\4\0\0\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\x0A\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2", "\x31\xD2\x83\x3D\xF0\x87\x4B\0\0\x74\x1D\x83\3\2\x83\xC0\6\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\4\x46\1\0\5\0\x66\xC7\x44\x46\4\x0F\0\x83\3\2\x83\xC0\6\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\4\x46\x0A\0"], # TTSW10.ichicheck
+
+# battle w Vampire
+[0x4686ed, 67, "\x8B\3\x8D\4\x40\x66\xC7\x44\x46\4\0\0\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\4\0\0\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\x0A\0\x8B\3\x8D\4\x40", "\xC7\x44\x46\2\5\0\x0C\0\x31\xD2\xEB\4\x31\xD2\xEB\x1B\x83\3\2\x89\x54\x46\x12\x66\x89\x54\x46\x16\xC7\x44\x46\x18\1\0\5\0\x66\xC7\x44\x46\x1C\xFF\1\x83\3\2\x83\xC0\6\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\4\x46\x0A\0\x15\0\xEB\x0C"], # TTSW10.moncheck
+
+# battle w Archsorcerer
+[0x468bb6, 60, "\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\4\0\0\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\6\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2", "\x31\xD2\x83\x3D\xF0\x87\x4B\0\0\x74\x1D\x83\3\2\x83\xC0\6\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\4\x46\1\0\5\0\x66\xC7\x44\x46\4\x0C\0\x83\3\2\x83\xC0\6\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\4\x46\6\0"], # TTSW10.moncheck
+[0x4727df, 60, "\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\4\0\0\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\x0A\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2", "\x31\xD2\x83\x3D\xF0\x87\x4B\0\0\x74\x1D\x83\3\2\x83\xC0\6\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\4\x46\1\0\5\0\x66\xC7\x44\x46\4\7\0\x83\3\2\x83\xC0\6\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\4\x46\x0A\0"], # TTSW10.ichicheck
+
+# battle w Knights
+[0x46ab26, 12, "\x8B\3\x8D\4\x40\x66\xC7\x44\x46\4\0\0", "\xC7\x44\x46\2\5\0\x0C\0\x90\x90\x90\x90"], # TTSW10.moncheck
+[0x473fb4, 60, "\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\4\0\0\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\6\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2", "\x31\xD2\x83\x3D\xF0\x87\x4B\0\0\x74\x1D\x83\3\2\x83\xC0\6\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\4\x46\1\0\6\0\x66\xC7\x44\x46\4\0\0\x83\3\2\x83\xC0\6\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\4\x46\6\0"], # TTSW10.ichicheck
+[0x475eaa, 60, "\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\4\0\0\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\x0A\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2", "\x31\xD2\x83\x3D\xF0\x87\x4B\0\0\x74\x1D\x83\3\2\x83\xC0\6\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\4\x46\1\0\5\0\x66\xC7\x44\x46\4\x12\0\x83\3\2\x83\xC0\6\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\4\x46\x0A\0"], # TTSW10.ichicheck
+
+# battle w Sorcerers
+[0x46bf97, 12, "\x8B\3\x8D\4\x40\x66\xC7\x44\x46\4\0\0", "\xC7\x44\x46\2\5\0\x0C\0\x90\x90\x90\x90"], # TTSW10.moncheck
+
+# 42F Zeno-GKnight event
+[0x47600b, 60, "\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\4\0\0\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\1\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2", "\x31\xD2\x83\x3D\xF0\x87\x4B\0\0\x74\x1D\x83\3\2\x83\xC0\6\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\4\x46\1\0\5\0\x66\xC7\x44\x46\4\x09\1\x83\3\2\x83\xC0\6\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\4\x46\1\0"], # TTSW10.ichicheck
+[0x476853, 23, "\x66\xC7\4\x46\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2\0\0\x8B\3\x8D\4\x40", "\xC7\4\x46\0\0\0\0\x83\x3D\xF0\x87\x4B\0\0\x74\7\xC7\4\x46\1\0\6\0"], # TTSW10.ichicheck
+
+# 50F 1st-round Zeno event
+[0x446571, 60, "\x66\xC7\4\x46\0\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2\4\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\4\0\0\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\x0B\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2\x0C\0\x8B\3\x8D\4\x40", "\x83\x3D\xF0\x87\x4B\0\0\x74\x13\xC7\4\x46\1\0\5\0\x66\xC7\x44\x46\4\x14\0\xFF\3\x83\xC0\3\xC7\4\x46\0\0\4\0\x66\xC7\x44\x46\4\0\0\xFF\3\x83\xC0\3\x66\xC7\4\x46\x0B\0\x66\xC7\x44\x46\2\x0C\0"], # TTSW10.handan
+# 24F "gate of space and time"
+[0x470e32, 23, "\x8B\3\x8D\4\x40\x66\xC7\4\x46\x0F\0\x8B\3\x8D\4\x40\x66\xC7\x44\x46\2\0\0", "\x8B\x14\x46\xC7\4\x46\1\0\5\0\x66\xC7\x44\x46\4\x0A\1\x83\xC0\3\x89\x14\x46"], # TTSW10.ichicheck
+
+# 50F >=2nd-round Zeno event
+[0x46cac5, 61,
+"\x8B\x03\x8D\x04\x40\x66\xC7\x44\x46\x02\x00\x00\x8B\x03\x8D\x04\x40\x66\xC7\x44\x46\x04\x00\x00\xFF\x03\x8B\x03\x8D\x04\x40\x66\xC7\x04\x46\x0A\x00\x8B\x03\x8D\x04\x40\x66\xC7\x44\x46\x02\x3E\x00\x8B\x03\x8D\x04\x40\x66\xC7\x44\x46\x04\x63\x00", "\x31\xD2\x89\x54\x46\x02\xFF\x03\x83\xC0\x03\xC7\x04\x46\x0A\x00\x3E\x00\x66\xC7\x44\x46\x04\x63\x00\x83\x3D\xF0\x87\x4B\x00\x00\x74\x1B\x83\x03\x02\x83\xC0\x06\x89\x54\x46\xFA\x66\x89\x54\x46\xFE\xC7\x04\x46\x01\x00\x06\x00\x66\x89\x54\x46\x04"], # TTSW10.moncheck
+
+# 3F Zeno event
+[0x46431d, 45, "\x8B\3\x8D\4\x40\x66\xC7\4\x46\0\0\x66\xC7\x44\x46\2\0\0\x66\xC7\x44\x46\4\0\0\xFF\3\x8B\3\x8D\4\x40\x66\xC7\4\x46\0\0\x66\xC7\x44\x46\2\0\0", "\x83\xC0\3\x83\x3D\xF0\x87\x4B\0\0\x74\x28\xC7\4\x46\1\0\5\0\x66\xC7\x44\x46\4\x0B\1\x83\3\2\x83\xC0\3\x31\xD2\x89\x14\x46\x89\x54\x46\4\x89\x54\x46\x08"], # TTSW10.opening2
+# 2F Zeno event aftermath
+[0x44dc78, 38, "\x33\xC0\xA3\xAC\xC5\x48\0\x8B\xC3\xE8\xB2\x4F\xFF\xFF\x33\xD2\x8B\x83\xCC\1\0\0\xE8\x6D\x58\xFC\xFF\x33\xD2\x8B\x83\xCC\1\0\0\xE8\x34\x59", "\xA3\xAC\xC5\x48\0\x8B\xC3\xE8\xB4\x4F\xFF\xFF\x8B\x15\xF0\x87\x4B\0\x85\xD2\x74\7\xB2\5\xE8%s\x8B\x83\xCC\1\0\0\xE8\x60\x58", :@_sub_instruct_playBGM_direct, 29] # TTSW10.Button1Click (OK)
+]
+
+  class << self
+    attr_reader :bgm_path
+    attr_reader :_bgm_filename
+    attr_reader :_bgm_basename
+  end
+  module_function
+  def init
+    @bgm_path = $BGMpath
+    bgm_basename = BGM_PHANTOMFLOOR + '.mp3'
+    unless @bgm_path
+      if File.exist?(BGM_DIRNAME+'/'+bgm_basename) # find in current dir
+        @bgm_path = CUR_PATH
+      else # find in app dir
+        @bgm_path = APP_PATH
+      end
+      @bgm_path.encode!('filesystem').force_encoding('ASCII-8Bit') if String.instance_methods.include?(:encoding) # this is necessary for Ruby > 1.9
+      @bgm_path += '/'+BGM_DIRNAME
+    end
+    @bgm_path = @bgm_path[0, 2].gsub('/', "\\") + @bgm_path[2..-1].gsub(/[\/\\]+/, "\\").sub(/\\?$/, "\\") # normalize file path (changing / into \; reducing multiple consecutive slashes into 1; always add a tailing \); the first 2 chars might be \\ which should not be reduced
+    bgm_filename = @bgm_path + bgm_basename
+    bgm_filename_enc = bgm_filename.dup
+    bgm_filename_enc.force_encoding('filesystem') if String.instance_methods.include?(:encoding) # this is necessary for Ruby > 1.9
+    bgmsize = bgm_filename.size
+    return raiseInvalDir(26) if bgmsize > MAX_PATH-2 # MAX_PATH includes the tailing \0
+    return raiseInvalDir(27) unless File.exist?(bgm_filename_enc)
+
+    fadeStrength = 999 / BGM_FADE_STEPS + 1 # i.e. (1000.0 / BGM_FADE_STEPS).ceil
+
+    # the first 0xa00 bytes are reserved for tswSL
+    # these are all pointers to the corresponding variables:
+    @_bgm_filename = $lpNewAddr + 0xa00
+    @_bgm_basename = @_bgm_filename + bgmsize - 12
+    @_bgm_phantomfloor = $lpNewAddr + 0xb04
+    @_isInProlog = $lpNewAddr + 0xb0c
+    @_last_bgmid = $lpNewAddr + 0xb10
+    @_mci_params = $lpNewAddr + 0xb14
+    @_mci_params_volume = @_mci_params + 8
+    offset_sub_soundplay_real = 0xb20
+    @_sub_soundplay_real = $lpNewAddr + offset_sub_soundplay_real
+    @_sub_timer4ontimer_real = $lpNewAddr + 0xb64
+    @_sub_instruct_playBGM = $lpNewAddr + 0xc00
+    @_sub_instruct_playBGM_direct = @_sub_instruct_playBGM + 11
+    @_sub_checkOrbFlight = $lpNewAddr + 0xc38
+    @_sub_checkBGM_ext = $lpNewAddr + 0xc64
+    @_sub_resetTTimer4 = $lpNewAddr + 0xd0c
+    @_sub_initBGM = $lpNewAddr + 0xd38
+    @_sub_finalizeBGM = $lpNewAddr + 0xd90
+    @_sub_save_excludeBGM = $lpNewAddr + 0xdd8
+
+    injBuf = bgm_filename.ljust(MAX_PATH, "\0") + BGM_PHANTOMFLOOR +
+[1, 0xff].pack('LL') + # 0B0C byte isInProlog; 0B10 byte last_bgmid
+[0, MCI_DGV_SETAUDIO_VOLUME, 1000].pack('lll') + # 0B14 mci_params
+# HWND dwCallback (no need); DWORD dwItem (volume); DWORD dwValue (volume fraction 0 to 1000)
+
+# 0B20: subroutine soundplay_real
+"\x55\x8B\xEC\x6A\0\x53\x56\x57\x8B\xD8\x31\xC0\x55\x68\x0C\xC7\x47\0\x64\xFF\x30\x64\x89\x20\xA1" +
+[BGM_ID_ADDR, 0xc083, 0x83fb, 0x11f8, 0x1877, 0xbf, @_bgm_basename, 0xbe, @_bgm_phantomfloor,
+ 0x0974, 0xf06b, BGM_BASENAME_GAP, 0xc681, BGM_BASENAME_ADDR, 0xa5fc, 0xe9a5,
+ BGM_PLAY_OPEN_N_PLAY_ADDR-$lpNewAddr-0xb62, 0x9090].pack('LSSSSCLCLSSCSLSSlS') + # 0B5D...0B62 jmp 47c6d3
+
+# 0B64: subroutine timer4ontimer_real
+[0xb8, @_mci_params, 0x7881, 8, 1000, 0x1b75, 0x158b, BGM_ID_ADDR, 0x153a, @_last_bgmid,
+ 0x0d75, 0x838b, OFFSET_TTIMER4, 0xd231, 0xe9, TTIMER_SETENABLED_ADDR-$lpNewAddr-0xb8d, # 0B88...0B8D jmp TTimer.SetEnabled
+ 0x6881, 8, fadeStrength, 0x7350, 0x6a09, 0x6800,
+ MCI_CLOSE, 0x0aeb, 0x68, MCI_DGV_SETAUDIO_ITEM_VALUE, 0x68, MCI_SETAUDIO,
+ 0x838b, OFFSET_TMEDIAPLAYER5, 0xb70f, 0x80, OFFSET_TMEDIAPLAYER_DEVICEID,
+ 0xe850, MCISENDCOMMAND_ADDR-$lpNewAddr-0xbbd, # 0BB8...0BBD call winmm.mciSendCommandA
+ 0xc085, 0xb8, @_mci_params_volume, 0x0575, 0x3883, 0, 0x3479,
+ 0x00c7, 1000, 0x838b, OFFSET_TMEDIAPLAYER5, 0xd231, 0x9088, OFFSET_TMEDIAPLAYER_PLAYSTATE, 0x838b, OFFSET_TTIMER4,
+ 0xe8, TTIMER_SETENABLED_ADDR-$lpNewAddr-0xbea, # 0BE5...0BEA call TTimer.SetEnabled
+ 0xa1, BGM_ID_ADDR, 0xa2, @_last_bgmid, 0x013c, 0x0778, 0xc38b,
+ 0xe9, offset_sub_soundplay_real-0xbff, # 0BFA...0BFF jmp sub_soundplay_real
+ 0xc3].pack('CLSCLSSLSLSSLSClSCLSSSLSCLCLSLSCLSlSCLSSCSSLSLSSLSLClCLCLSSSClC') +
+
+# 0C00: subroutine instruct_playBGM
+"\x8B\x14\x4D\x50\xC7\x48\0\x84\xD2\x74\x2B\x88\x15" +
+[BGM_ID_ADDR, 0xf684, 0x0b74, 0x838b, OFFSET_TMEDIAPLAYER6, 0xe8, TMEDIAPLAYER_CLOSE_ADDR-$lpNewAddr-0xc20, # 0C1B...0C20 call TMediaPlayer.Close
+ 0x838b, OFFSET_TTIMER4, 0x06b2, 0xe8, TTIMER_SETENABLED_ADDR-$lpNewAddr-0xc2d, # 0C28...0C2D call TTimer.SetEnabled
+ 0xc38b, 0xe8, TTIMER4_ONTIMER_ADDR-$lpNewAddr-0xc34, # 0C2F...0C34 jmp TTSW10.timer4ontimer
+ 0xd231, 0x90c3].pack('LSSSLClSLSClSClSS') +
+
+# 0C38: subroutine checkOrbFlight
+[0xb9, BGM_ID_ADDR, 0xba, @_last_bgmid, 0x3980, 0x7801, 0xe81b,
+ BGM_CHECK_ADDR-$lpNewAddr-0xc4c].pack('CLCLSSSl') + # 0C47...0C4C call TTSW10.soundcheck
+"\x8A\2\x3A\1\x74\x10\xC6\1\xFF\xB2\6\x8B\x83" +
+[OFFSET_TTIMER4, 0xe9, TTIMER_SETENABLED_ADDR-$lpNewAddr-0xc62, # 0C5D...0C62 jmp TTimer.SetEnabled
+ 0x90c3].pack('LClS') +
+
+# 0C64: subroutine checkBGM_ext
+[0xb8, STATUS_ADDR, 0x3883, 0, 0x0b75, 0x05c6, BGM_ID_ADDR].pack('CLSCSSL') +
+"\x0E\x83\xC4\4\xC3\x8B\x40#{(STATUS_INDEX[4] << 2).chr}\x50" +
+BGM_CHECK_EXT.map {|i| [0xf883, i[0], 0x75, i[7], 0xb8, 0, i[5], i[6], 0xa0,
+ MAP_ADDR+123*i[0]+11*i[1]+i[2]+2, 0x258a, MAP_ADDR+123*i[0]+11*i[3]+i[4]+2,
+ 0xeb, i[8]].pack(i[8] ? 'SCCcCSCCCLSLCc' : 'SCCcCSCCCLSL')}.join +
+"\x3C\x17\x75\4\xB0\x0C\xEB\x0C\xC1\xE8\x08\x38\xE0\x74\2\x58\xC3\xC1\xE8\x10\xA2" +
+[BGM_ID_ADDR, 0xc483, 0xc308, 0x90].pack('LSSC') +
+
+# 0D0C: subroutine resetTTimer4
+[0x488b, OFFSET_PARENT, 0x813b, OFFSET_TTIMER4, 0x1575, 0x05c6, @_isInProlog,
+ 0xb900, BGM_FADE_INTERVAL, 0x483b, OFFSET_TTIMER_INTERVAL, 0x0474, 0x4889,
+ OFFSET_TTIMER_INTERVAL, 0xc3, 0x503a, OFFSET_TTIMER_ENABLED, 0x0375, 0xc483,
+ 4, 0x90c3, 0x9090].pack('SCSLSSLSLSCSSCCSCSSCSS') +
+
+# 0D38: subroutine initBGM
+[0xd88b, 0x838b, OFFSET_TTIMER4, 0x408a, OFFSET_TTIMER_ENABLED, 0x0124, 0xa2,
+ @_isInProlog, 0xba, BGM_ID_ADDR, 0x0374, 0x02c6, 21, 0x028a, 0x013c, 0x0779,
+ 0xe8, BGM_CHECK_ADDR-$lpNewAddr-0xd5f, # 0D5A...0D5F call TTSW10.soundcheck
+ 0x028a, 0xa2, @_last_bgmid, 0x838b, OFFSET_TMEDIAPLAYER5, 0x80c6,
+ OFFSET_TMEDIAPLAYER_PLAYSTATE, 0x0f00, 0x80b7, OFFSET_TMEDIAPLAYER_DEVICEID,
+ 0x68, @_mci_params, 0x006a, 0x68, MCI_CLOSE, 0xe850, MCISENDCOMMAND_ADDR-$lpNewAddr-0xd8C, # 0D87...0D8C call winmm.mciSendCommandA
+ 0x01b2, 0x04eb].pack('SSLSCSCLCLSSCSSSClSCLSLSLSSLCLSCLSlSS') +
+
+# 0D90: subroutine finalizeBGM
+[0xd231, 0xd88b, 0x1588, BGM_SETTING_ADDR, 0x838b, OFFSET_TMENUITEM_BGMON1,
+ 0xe8, TMENUITEM_SETCHECKED_ADDR-$lpNewAddr-0xda5, # 0DA0...0DA5 callTMenuItem.SetChecked
+ 0xd231, 0x1538, BGM_SETTING_ADDR, 0x0774, 0xc38b, 0xe9, offset_sub_soundplay_real-0xdb6, # 0DB1...0DB6 jmp sub_soundplay_real
+ 0x1589, BGM_ID_ADDR, 0x838b, OFFSET_TMEDIAPLAYER5,
+ 0xe8, TMEDIAPLAYER_CLOSE_ADDR-$lpNewAddr-0xdc7, # 0DC2...0DC7 call TMediaPlayer.Close
+ 0x158a, @_isInProlog, 0x838b, OFFSET_TTIMER4, 0xe9,
+ TTIMER_SETENABLED_ADDR-$lpNewAddr-0xdd8].pack('SSSLSLClSSLSSClSLSLClSLSLCl') + # 0DD3...0DD8 jmp TTimer.SetEnabled
+
+# 0DD8: subroutine save_excludeBGM
+"\x31\xFF\x8B\x18\x53\x8D\x44\x24\x08\x57\x50\x51\x52\x53\xB8" +
+[BGM_ID_ADDR, 0x188b, 0x1d29, DATA_CHECK1_ADDR, 0x1d29,
+ DATA_CHECK2_ADDR, 0x3889, 0xe8, WRITE_FILE_ADDR-$lpNewAddr-0xe00, # 0DFB...0E00 call kernel32.WriteFile
+ 0xe8, CLOSE_HANDLE_ADDR-$lpNewAddr-0xe05, # 0E00...0E05 call kernel32.CloseHandle
+ 0x1d89, BGM_ID_ADDR, 0x0483, 0x1424, 0xc2, 4].pack('LSSLSLSClClSLSSCS')
+
+    WriteProcessMemory.call_r($hPrc, @_bgm_filename, injBuf, injBuf.size, 0)
+
+    takeOverBGM(true) if $BGMtakeOver
+  end
+  def takeOverBGM(bEnable)
+    BGM_PATCH_BYTES.each do |i|
+      if bEnable
+        d = i[3]
+        if (p=i[4])
+          v = instance_variable_get(p)
+          if (o=i[5])
+            v -= o+i[0]
+          end
+          d = d % [v].pack('l')
+        end
+      else
+        d = i[2]
+      end
+      WriteProcessMemory.call($hPrc, i[0], d, i[1], 0)
+    end
+    if bEnable
+      callFunc(@_sub_initBGM)
+    else
+      callFunc(@_sub_finalizeBGM)
+    end
+  end
+  def raiseInvalDir(reason)
+    if msgboxTxt(23, MB_ICONEXCLAMATION | MB_OKCANCEL, $str::STRINGS[reason]) == IDCANCEL
+      preExit; msgboxTxt(13); exit
+    end
+    @bgm_path = nil
+  end
+end
+
+def disposeRes() # when switching to a new TSW process, hDC and hPrc will be regenerated, and the old ones should be disposed of
+  VirtualFreeEx.call($hPrc || 0, $lpNewAddr || 0, 0, MEM_RELEASE)
+  CloseHandle.call($hPrc || 0)
+  $appTitle = nil
+end
+def preExit() # finalize
+  return if $preExitProcessed # do not exec twice
+  $preExitProcessed = true
+  begin
+    BGM.takeOverBGM(false)
+  rescue Exception
+  end
+  SendMessage.call($hWndText || 0, WM_SETTEXT, 0, '')
+  UnregisterHotKey.call(0, 1)
+  disposeRes()
+end
+def raise_r(*argv)
+  preExit() # ensure all resources disposed
+  raise(*argv)
+end
+def initLang()
+  if $isCHN
+    alias :msgboxTxt :msgboxTxtW
+  else
+    alias :msgboxTxt :msgboxTxtA
+  end
+end
+def initSettings()
+  load(File.exist?(APP_SETTINGS_FNAME) ? APP_SETTINGS_FNAME : File.join(APP_PATH, APP_SETTINGS_FNAME))
 rescue Exception
 end
-
-REG_HOTKEY.call_r(0, 0, MODIFIER, KEY)
-
-def log(str) # log in console output
-  WRITE_CON.call($hCon, str, str.size, $bytesRead, 0)
-end
-
-def play() # play mp3
-  log("Now playing: `#{$audio}'\n")
-  SET_CON.call("tswBGM [pID=#{$pID}] - #{$audio}")
-  return false if $audio.empty?
-  f = File.join(PATH, $audio)
-  ($audio = ''; return false) if MCI_EXE.call("open \"#{f}\" type MPEGVideo alias m").zero?
-  ($audio = ''; return false) if MCI_EXE.call('play m repeat').zero? # stop if any fails
-  return true
-end
-
-def fade() # fade out current bgm
-  unless $audio.empty?
-    $audio = ''
-    SET_CON.call("tswBGM [pID=#{$pID}] - None")
-    for i in 1..10 # fade out
-      return false if MCI_EXE.call('setaudio m Volume to '+((10-i)*100).to_s).zero?
-      sleep(TIMER_INTERVAL/2)
+def waitTillAvail(addr) # upon initialization of TSW, some pointers or handles are not ready yet; need to wait
+  r = readMemoryDWORD(addr)
+  while r.zero?
+    case MsgWaitForMultipleObjects.call_r(1, $bufHWait, 0, INTERVAL_TSW_RECHECK, QS_ALLBUTTIMER)
+    when 0 # TSW quits during waiting
+      disposeRes()
+      return
+    when 1 # this thread's msg
+      checkMsg(false)
+    when WAIT_TIMEOUT
+      r = readMemoryDWORD(addr)
     end
-    return false if MCI_EXE.call('close m').zero?
   end
-  return true
+  return r
 end
-
 def init()
-  $audio = '' # music filename
-  $floor = 99 # current floor #
-  $waitBattle = false # if the battle with GreatMagicMaster or Zeno has ended
-  $bytesRead = '    '
-  $buf2 = "\0\0"
-  $buf4 = "\0\0\0\0"
-  $buf16 = ' '*16
-  $gateOfST = false # if reach the gate of space and time?
-  $epilogue = false # if the tower falls down?
-  $firstCheck = true # we should run the first check since in that case we can't determine the current progress
+  $hWnd = FindWindow.call(TSW_CLS_NAME, 0)
+  $tID = GetWindowThreadProcessId.call($hWnd, $buf)
+  $pID = $buf.unpack('L')[0]
+  return if $hWnd.zero? or $pID.zero? or $tID.zero?
 
-  if $hWnd.zero? or $pID.zero? or $tID.zero?
-    $hWnd = FIND_WIN.call(0, 0, 'TTSW10', 0)
-    if $hWnd.zero? # TSW not open, wait...
-      log(Time.now.strftime('[%H:%M:%S]')+" Waiting for TSW to load...\n")
-      while $hWnd.zero?
-        $hWnd = FIND_WIN.call(0, 0, 'TTSW10', 0)
-        sleep(TIMER_INTERVAL)
-      end
-      $audio = FILES[0] if $BGM # the braveman is walking to save the princess...
-      $firstCheck = false # we run tswBGM from the start, so no need to run first check
-    end
-    $pID = '\0\0\0\0'
-    $tID = Win32API.new('user32', 'GetWindowThreadProcessId', 'lp', 'l').call($hWnd, $pID)
-    $pID = $pID.unpack('L')[0]
+  initSettings()
+  $hPrc = OpenProcess.call_r(PROCESS_VM_WRITE | PROCESS_VM_READ | PROCESS_VM_OPERATION | PROCESS_SYNCHRONIZE, 0, $pID)
+  $bufHWait[0, POINTER_SIZE] = [$hPrc].pack(HANDLE_ARRAY_STRUCT)
 
-    raise("Cannot find the TSW process or thread. Please check whether\nthis is really a TSW window? hWnd=#{$hWnd}. tswBGM has stopped.\n\nAs an advanced option, you can manually assign $hWnd, $tID\nand $pID in `tswBGMdebug.txt'; then restart tswBGM.") if $pID.zero? or $tID.zero?
-  end
-  $hPrc = OPEN_PROCESS.call_r(PROCESS_VM_READ | PROCESS_VM_OPERATION | PROCESS_VM_WRITE, 0, $pID)
+  tApp = readMemoryDWORD(TAPPLICATION_ADDR)
+  $hWndTApp = readMemoryDWORD(tApp+OFFSET_OWNER_HWND)
+  $TTSW = readMemoryDWORD(TTSW_ADDR)
+  return unless (edit8 = waitTillAvail($TTSW+OFFSET_EDIT8))
+  return unless ($hWndText = waitTillAvail(edit8+OFFSET_HWND))
 
-  unless $audio.empty?  # the braveman is walking to save the princess...
-    log(Time.now.strftime('[%H:%M:%S]')+' Loading the game... ')
-    sleep(6) if play
-    fade
-  end
-  if IS_WIN.call($hWnd).zero? # in case TSW is closed while sleeping
-    log(Time.now.strftime('[%H:%M:%S]')+" TSW (pID=#{$pID}) has been closed.\n\n")
-    $pID = $tID = 0
-    fade; init
+  ShowWindow.call($hWndStatic1, SW_HIDE)
+  Str.isCHN()
+  initLang()
+  $appTitle = 'tswBGM - pID=%d' % $pID
+  $appTitle = Str.utf8toWChar($appTitle) if $isCHN
+
+  $lpNewAddr = VirtualAllocEx.call_r($hPrc, 0, 4096,MEM_COMMIT|MEM_RESERVE, PAGE_EXECUTE_READWRITE)
+  BGM.init
+
+  msgboxTxt(11)
+  return true
+end
+def waitInit()
+  ShowWindow.call($hWndStatic1, SW_SHOW)
+  if $isCHN
+    SetWindowTextW.call($hWndStatic1, Str.utf8toWChar(Str::StrCN::STRINGS[20]))
   else
-    ATT_INPUT.call_r(GET_TID.call, $tID, 1) # This is necessary for GetFocus to work: 
-    #https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getfocus#remarks
-    MESSAGE_BOX.call($hWnd, "tswBGM is currently running with TSW (pID=#{$pID}).\n\nPress the hotkey(Default=F8) to toggle BGM on/off;\nPress it twice quickly or hold it to quit.", 'tswBGM', MB_ICONINFORMATION)
-    $hWndText = 0
-    width = 0
-    wh = ' ' * 16
-    while width < 600 # find the status bar, whose width is always larger than 600 (to avoid mistakenly finding other textbox window)
-      $hWndText = FIND_WIN.call($hWnd, $hWndText, 'TEdit', 0)
-      if $hWndText.zero?
-        MESSAGE_BOX.call($hWnd, "tswBGM failed to find the status bar at the bottom of the TSW window. Please check whether this is really a TSW process?\n\n\tPID=#{$pID}, hWND=#{$hWnd}\n\nHowever, tswBGM will continue running anyway.", 'tswBGM', MB_ICONEXCLAMATION)
-        break
-      end
-      GET_RECT.call_r($hWndText, wh)
-      width = wh.unpack('L4')[2]
+    SetWindowText.call($hWndStatic1, Str::StrEN::STRINGS[20])
+  end
+  loop do # waiting while processing messages
+    case MsgWaitForMultipleObjects.call_r(0, nil, 0, INTERVAL_TSW_RECHECK, QS_ALLBUTTIMER)
+    when 0
+      checkMsg(false)
+    when WAIT_TIMEOUT
+      break if init()
     end
   end
 end
-
-init
-
-def mute() # stop playing wav sound
-  asm = "\x8B\x83\x6C\x04\0\0" # mov eax, dword ptr ds:[ebx+0x46C]; TTSW10.MediaPlayer6:TMediaPlayer
-  asm += [0xe8, MUTE_ADDR-QUIT_ADDR-14, 0x5b, 0xc3, 0x90].pack('clccc') # call MUTE_ADDR; pop ebx; ret
-  WRITE_PROCESS.call_r($hPrc, QUIT_ADDR+3, asm, 14, $bytesRead)
-  SEND_MESSAGE.call($hWnd, WM_COMMAND, QUIT_MENUID, 0) # refresh once using timer1
-  WRITE_PROCESS.call_r($hPrc, QUIT_ADDR+3, QUIT_ORIG, 14, $bytesRead) # restore
-end
-
-def wait() # pause until the player clicks "OK" or the current event is over
-  while sleep(TIMER_INTERVAL)
-    READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[2]+2, $buf2, 2, $bytesRead)
-    break if $buf2 == "\1\0"
-  end
-end
-
-def wait_b() # pause until the player clicks a button
-  5.times do # wait for 1s at most for the button to show
-    GET_CLS.call(GET_FOC.call, $buf16, 16)
-    break if $buf16[0, 7] == 'TButton'
-    sleep(TIMER_INTERVAL)
-  end
-  loop do # check is the button disappears
-    GET_CLS.call(GET_FOC.call, $buf16, 16)
-    break if $buf16[0, 7] != 'TButton'
-    sleep(TIMER_INTERVAL)
-  end
-end
-
-def routine(floor) # routine music (non-event)
-  case floor
-  when 0 then f = FILES[0]; t = 'on 0F. '
-  when 50 then f = FILES[6]; t = 'on 50F. '
-  when 44 then f = FILES[-1]; t = 'on 44F. '
-  else b = (floor-1)/10+1; f = FILES[b]; t = "in Block #{b}. "
-  end
-  log(Time.now.strftime('[%H:%M:%S]')+' You are currently '+t) unless f == $audio
-  return f
-end
-
-def isDead() # hp<0
-  READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[3], $buf4, 4, $bytesRead)
-  if $buf4 == "\0\0\0\0"
-    if $audio != FILES[16]
-      fade
-      log(Time.now.strftime('[%H:%M:%S]')+' You died in the tower! ')
-      $audio = FILES[16]
-      play
-    end
-    return true
-  else return false
-  end
-end
-
-def checkSpecial() # special event
-  READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[4], $buf4, 4, $bytesRead)
-  offset = $buf4.unpack('L')[0]*6
-  READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[5]+offset, $buf4, 4, $bytesRead)
-  return $buf4.unpack('S2')
-rescue # not necessarily *6, so in that case *6 may lead to int32 overflow
-  return [0, 0]
-end
-
-def checkHotkey() # if pressed hotkey
-  msg = ' '*44
-  PEEK_MESSAGE.call(msg, 0, 0, 0, 1)
-  # 32 bit? 64 bit? 0x312 = hotkey event
-  if msg[4, 4] == "\x12\x03\0\0" or msg[8, 4] == "\x12\x03\0\0" # if pressed hotkey
-    sleep(QUIT_INTERVAL)
-    msg = ' '*44
-    PEEK_MESSAGE.call(msg, 0, 0, 0, 1)
-    if msg[4, 4] == "\x12\x03\0\0" or msg[8, 4] == "\x12\x03\0\0" # if twice within 0.5s
-      UNREG_HOTKEY.call(0, 0)
-      Win32API.new('kernel32', 'CloseHandle', 'l', 'l').call($hPrc)
-      fade
-      $hWnd = 0 if IS_WIN.call($hWnd).zero?
-      SEND_MESSAGE.call($hWndText, WM_SETTEXT, 0, '')
-      MESSAGE_BOX.call($hWnd, "tswBGM has stopped.", 'tswBGM', MB_ICONINFORMATION)
-      exit
-    else
-      $BGM = !$BGM
-      SEND_MESSAGE.call($hWndText, WM_SETTEXT, 0, 'tswBGM: You turned BGM '+($BGM ? 'on.':'off.'))
-      if $BGM
-        $firstCheck = true # we still need to run the first check since we do not know the progress since BGM is turned off
-      else
-        fade
-        log(Time.now.strftime('[%H:%M:%S]')+" You turned off BGM.\n\n")
-        SET_CON.call("tswBGM [pID=#{$pID}] - OFF")
-      end
-    end
-  end
-end
-
-def firstCheck(floor)
-  WRITE_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[2], "\0\0", 2, $bytesRead)
-  case floor
-  when 10
-    pair = [[0, 4, 0xe], [1, 3, 0xfe]] # skeleton c, fairy
-    # in each array, [check which TYPES_ADDR?, check which TYPES?, go to which progress?]
-  when 20
-    pair = [[2, 0, 0x14], [3, 3, 0xfe]] # game, fairy
-  when 25
-    pair = [[5, 0, 0x17], [6, 3, 0xfe]] # gate, fairy
-  when 40
-    pair = [[7, 0, 0x23], [8, 3, 0xfe]] # gate, fairy
-  when 49
-    pair = [[9, -1, 0x2e], [10, 3, 0xfe]] # zeno, fairy
-  else
-    $firstCheck = false; return 0
-  end
-  for i in pair
-    READ_PROCESS.call_r($hPrc, BASE_ADDRESS+TYPES_ADDR[i[0]], $buf2, 2, $bytesRead)
-    ($firstCheck = false; return i[2]) if $buf2.unpack('C')[0] == TYPES[i[1]]
-  end
-  $firstCheck = false; return 0
-end
-
-while sleep(TIMER_INTERVAL)
-  checkHotkey
-  next unless $BGM
-
-  if IS_WIN.call($hWnd).zero?
-    log(Time.now.strftime('[%H:%M:%S]')+" TSW (pID=#{$pID}) has been closed.\n\n")
-    $pID = $tID = 0
-    fade; init
-  end
-  audio = ''
-
-  READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[2], $buf2, 2, $bytesRead)
-  progress = $buf2.unpack('S')[0]
-  READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[1], $buf2, 2, $bytesRead)
-  if $buf2 == "\1\0" # using orb of flying
-# The original design of TSW is to stop the current music whenever orbOfFly is used
-# but I decide that it is better if we stop the music only when a) it is a special event
-# or b) you fly out of the current block
-    next if isDead() # the flag will also be on when dead
-    if progress == 255 # cancel any event when using orbOfFly
-      fade
-      log(Time.now.strftime('[%H:%M:%S]')+" You are using the Orb of Flying.\n")
-      WRITE_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[2], "\0\0", 2, $bytesRead) # cancel flag
-      next
-    end
-    $waitBattle = false # the battle must have ended
-    while sleep(TIMER_INTERVAL) # wait for end of use
-      break if isDead()
-      READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[1], $buf2, 2, $bytesRead)
-      READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[0], $buf4, 4, $bytesRead)
-      curFloor = $buf4.unpack('l')[0]
-      if (curFloor == 50 and $floor != 50) or ($floor == 50 and curFloor != 50) or ($floor == 44 and curFloor != 44) or (curFloor-1)/10 != ($floor-1)/10 # fly out of that block
-        log(Time.now.strftime('[%H:%M:%S]')+" You are using the Orb of Flying.\n") unless $audio.empty?
-        fade
-      end
-      break if $buf2 == "\0\0"
-      checkHotkey
-    end
-    next
-  end
-
-  READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[0], $buf4, 4, $bytesRead)
-  floor = $buf4.unpack('l')[0]
-  progress = firstCheck(floor) if $firstCheck
-
-  if $gateOfST # if passed gateOfSpaceAndTime
-    READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[6], $buf4, 4, $bytesRead) # the hero's current coordinate
-    if $buf4 == "\5\0\0\0" && floor >= 24 # you are ascending in the tower through GST
-      if progress == 50 # thief becomes zeno
-        log(Time.now.strftime('[%H:%M:%S]')+" Zeno shows up!\n")
-        wait_b; mute
-        $gateOfST = false
-      else next end
-    else
-      $gateOfST = false
-    end
-  elsif floor == 24 # have not passed GST yet, on 24F
-    if $audio != FILES[3]
-      WRITE_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[2], "\0\0", 2, $bytesRead) # cancel flag
-      fade
-      log(Time.now.strftime('[%H:%M:%S]')+' You are currently in Block 3. ')
-      $audio = FILES[3]
-      play
-    end
-    READ_PROCESS.call_r($hPrc, BASE_ADDRESS+TYPES_ADDR[4], $buf2, 2, $bytesRead) # the event type @ F=24 x=5 y=0
-    if $buf2.unpack('C')[0] == TYPES[2] # ...is a trigger rather than floor
-      loop do # wait for you to pass GST
-        checkHotkey
-        break unless $BGM # if turned off BGM, then no need to worry any more
-        READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[6], $buf4, 4, $bytesRead) # the hero's current coordinate
-        if $buf4 == "\5\0\0\0" # x=5 y=0
-          $gateOfST = true
-          log(Time.now.strftime('[%H:%M:%S]')+" You entered the gate of space and time!\n")
-          fade; break
+def checkMsg(checkAll=true)
+  while !PeekMessage.call($buf, 0, 0, 0, 1).zero?
+    msg = $buf.unpack(MSG_INFO_STRUCT)
+    case msg[1]
+    when WM_HOTKEY
+      time = msg[4]
+      diff = time - $time
+      $time = time
+      case msg[2]
+      when 1
+        if diff < INTERVAL_QUIT
+          preExit; msgboxTxt(13); exit
         end
-        READ_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[0], $buf4, 4, $bytesRead)
-        break if $buf4.unpack('l')[0] != 24 # you load a data or fly somewhere else
-        sleep(TIMER_INTERVAL)
+        if checkAll
+          next if BGM.bgm_path.nil? # BGM files are not ready
+          $BGMtakeOver = !$BGMtakeOver
+          BGM.takeOverBGM($BGMtakeOver)
+          SendMessage.call($hWndText, WM_SETTEXT, 0, 'tswBGM: You turned BGM optimization '+($BGMtakeOver ? 'on.':'off.'))
+        else
+          ShowWindow.call($hWndStatic1, SW_SHOW)
+        end
+        next
       end
-      next
+    when WM_LBUTTONDOWN..WM_MBUTTONDBLCLK
+      if msg[0] == $hWndStatic1
+        case msgboxTxt(21, MB_YESNOCANCEL|MB_DEFBUTTON2|MB_ICONQUESTION)
+        when IDYES
+          preExit; msgboxTxt(13); exit
+        when IDNO
+          ShowWindow.call($hWndStatic1, SW_HIDE)
+        end
+     end
     end
+    TranslateMessage.call($buf)
+    DispatchMessage.call($buf)
   end
-  c = checkSpecial
-  if (c == [6, TYPES[-1]] && (floor == 3 || floor == 42 || floor == 49)) || (c[0] == 27 && floor == 49) # zeno on 3f/42f/49f
-    log(Time.now.strftime('[%H:%M:%S]')+" Zeno shows up!\n") unless $audio.empty?
-    WRITE_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[2], "\xFF\0", 2, $bytesRead) # flag: special event triggered
-    fade; next
-  elsif c == [2, 0] && floor == 50 # you touches zeno on 50f
-    log(Time.now.strftime('[%H:%M:%S]')+" The tower falls down!\n") unless $audio.empty?
-    fade; $epilogue = true; next
+end
+
+CUR_PATH = Dir.pwd
+APP_PATH = File.dirname($Exerb ? ExerbRuntime.filepath : __FILE__) # after packed by ExeRB into exe, __FILE__ will be useless
+initSettings()
+initLang()
+$time = 0
+$bufHWait = "\0" * (POINTER_SIZE << 1)
+$hMod = GetModuleHandle.call_r(0)
+$hIco = LoadImage.call($hMod, APP_ICON_ID, IMAGE_ICON, 48, 48, LR_SHARED)
+$hWndStatic1 = CreateWindowEx.call_r(WS_EX_TOOLWINDOW|WS_EX_TOPMOST, 'STATIC', nil, WS_POPUP|WS_BORDER|SS_SUNKEN|SS_NOTIFY|SS_RIGHT, 20, 20, 142, 52, 0, 0, 0, 0)
+$hWndStatic2 = CreateWindowEx.call_r(0, 'STATIC', nil, WS_CHILD|WS_VISIBLE|SS_ICON, 0, 0, 48, 48, $hWndStatic1, 0, 0, 0)
+SendMessage.call($hWndStatic2, STM_SETICON, $hIco, 0)
+
+RegisterHotKey.call_r(0, 1, CON_MODIFIER, CON_HOTKEY)
+waitInit() unless init()
+
+loop do
+  case MsgWaitForMultipleObjects.call_r(1, $bufHWait, 0, -1, QS_ALLBUTTIMER)
+  when 0 # TSW has quitted
+    disposeRes()
+    waitInit()
+    next
+  when 1 # this thread's msg
+    checkMsg()
   end
-  if $waitBattle # currently battling with zeno or greatMagicMaster
-    if floor == $floor
-      offset = TYPES_ADDR[floor == 25 ? 5 : 9] # the event type @ F=25 x=5 y=9 or F=49 x=5 y=2
-      READ_PROCESS.call_r($hPrc, BASE_ADDRESS+offset, $buf2, 2, $bytesRead)
-      if $buf2.unpack('C')[0] == TYPES[1] # the gate has opened
-        $waitBattle = false; progress = 0xfe # fairy
-      else next
-      end
-    else # the battle must have ended if floor # is different
-      $waitBattle = false
-    end
-  end
-  if $epilogue # you touches zeno on 50f
-    if floor != 50 # you load a data
-      $epilogue = false; fade
-    elsif c == [5,0]
-      $epilogue = false; progress = 0xfd # see you again
-    else
-      next
-    end
-  end
-  if floor == 20 # check if vampire has showed up
-    READ_PROCESS.call_r($hPrc, BASE_ADDRESS+TYPES_ADDR[2], $buf2, 2, $bytesRead)
-    if $buf2.unpack('C')[0] == TYPES[0] # the gate has been triggered
-      (fade; log(Time.now.strftime('[%H:%M:%S]')+' You will challenge Vampire! ')) if $audio != FILES[8]
-      progress = 0x14 # vampire
-    end
-  end
-  if progress == 255 # special event triggered
-    next if floor == $floor
-    WRITE_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[2], "\0\0", 2, $bytesRead) # cancel flag if floor # has changed
-    audio = routine(floor)
-  else
-    WRITE_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[2], "\xFF\0", 2, $bytesRead) # flag: special event triggered
-    case progress
-    when 0xFE # fairy after Zeno or GreatMagicMaster is beaten
-      log(Time.now.strftime('[%H:%M:%S]')+' You beat the boss! ')
-      audio = FILES[14]
-    when 0xFD # see you again
-      log(Time.now.strftime('[%H:%M:%S]')+' See you again! ')
-      audio = FILES[13]
-    when 0xA, 0x29, 0x2A, 0x2B # Zeno
-      log(Time.now.strftime('[%H:%M:%S]')+" Zeno shows up!\n") unless $audio.empty?
-      fade
-    when 0x2C # I am waiting for you (on 42F)
-      log(Time.now.strftime('[%H:%M:%S]')+" Zeno shows up!\n") unless $audio.empty?
-      fade
-      wait; mute
-      WRITE_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[2], "\0\0", 2, $bytesRead)
-      audio = routine(floor)
-    when 0xB # Zeno on 3F
-      log(Time.now.strftime('[%H:%M:%S]')+" Zeno shows up!\n") unless $audio.empty?
-      fade; wait_b
-      30.times do # wait for 6 secs at most
-        break if checkSpecial == [1, 0]
-        sleep(TIMER_INTERVAL)
-      end
-      log(Time.now.strftime('[%H:%M:%S]')+' Prologue starts! ')
-      audio = FILES[12]
-    when 0xD, 0xE# skeleton army
-# There should be a pause according to the original design of TSW, but I deside that the effect is better without `wait`
-      log(Time.now.strftime('[%H:%M:%S]')+' You will challenge the skeleton army! ') unless $audio == FILES[7]
-      (fade; wait_b) if progress == 0xD
-      audio = FILES[7]
-    when 0xF, 0x15, 0x27 # you beat skeleton / vampire / knight
-      log(Time.now.strftime('[%H:%M:%S]')+' You beat the boss! ')
-      fade; wait_b
-      audio = FILES[14]
-    when 0x10, 0x16, 0x18, 0x28, 0x2F # fairy
-      if $audio != FILES[14]
-        log(Time.now.strftime('[%H:%M:%S]')+' You see a fairy! ')
-        fade
-        $audio = FILES[14]
-        play
-      end
-      wait; fade; WRITE_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[2], "\0\0", 2, $bytesRead)
-      audio = routine(floor)
-    when 0x14 # vampire
-      if $audio != FILES[8]
-        log(Time.now.strftime('[%H:%M:%S]')+' You will challenge Vampire! ') unless $audio.empty?
-        fade; wait; mute
-      end
-      audio = FILES[8]
-    when 0x17 # GMM
-      log(Time.now.strftime('[%H:%M:%S]')+' You will challenge Great Magic Master! ')
-      fade; wait
-      audio = FILES[9]
-      $waitBattle = true
-    when 0x19, 0x1a # princess
-      log(Time.now.strftime('[%H:%M:%S]')+' You see a princess! ') unless $audio == FILES[15]
-      audio = FILES[15]
-    when 0x22..0x26 # knight army
-      log(Time.now.strftime('[%H:%M:%S]')+' You will challenge the knight army! ') unless $audio == FILES[10]
-      (fade; wait_b) if progress == 0x22
-      audio = FILES[10]
-    when 0x2D, 0x2E # zeno
-      log(Time.now.strftime('[%H:%M:%S]')+' You will challenge Magic Seargent, Zeno! ') unless $audio == FILES[11]
-      (fade; wait_b) if progress == 0x2D
-      audio = FILES[11]
-      $waitBattle = true
-    else
-      WRITE_PROCESS.call_r($hPrc, BASE_ADDRESS+OFFSETS[2], "\0\0", 2, $bytesRead)
-      audio = routine(floor)
-    end
-  end
-  $floor = floor
-  next if audio == $audio
-  fade
-  $audio = audio
-  play
 end

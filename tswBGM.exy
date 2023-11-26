@@ -8,9 +8,11 @@ general:
 
 file:
   tswBGM.rbw:
-  Win32API.so:
-    file: c:/Ruby187/lib/ruby/1.8/i386-mingw32/Win32API.so
+  win32/api.so:
+    file: D:/ruby187/lib/ruby/1.8/i386-mingw32/win32/api.so
     type: extension-library
+  ./stringsGBK.rb:
+  ./strings.rb:
 
 resource:
   icon:
@@ -19,7 +21,7 @@ resource:
     color : 32
     file : 1.ico
   version:
-    file_version_number : 2.0.2.0
-    product_version_number: 2.0.2.0
+    file_version_number : 3.0.0.0
+    product_version_number: 3.0.0.0
     company_name : Zack Sun
     product_name : tswBGM

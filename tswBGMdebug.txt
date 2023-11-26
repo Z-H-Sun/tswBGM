@@ -1,21 +1,47 @@
-# If you place the BGM folder elsewhere, or you rename the mp3 file(s), you can assign PATH and FILES here
-# PATH = File.join(ENV['userprofile'], 'Desktop/BGM')
-# FILES[0] = '幸運の金貨のテーマ.mp3'
+#!/usr/bin/env ruby
+# encoding: ASCII-8Bit
+# If there is any non-ASCII characters in this file, please save it with ANSI (locale) encoding, not UTF-8
 
-# By default, BGM is on after running tswBGM. By uncommenting the following line, you make `off' default, and you can turn BGM on by pressing the hotkey later
-# $BGM = false
+# Unless otherwise noted, all settings here will be updated every time you start a new TSW process
+# i.e., while TSW is not running, and this app is hibernating, you can modify and save this file, and these settings will be applied the next time you start TSW
 
-# If the program fails to automatically find the handle of the window or processthread ID of TSW, uncomment the following lines and manually assign them here, and then restart tswBGM
-# $hWnd = 0x0
-# $pID = 0
-# $tID = 0
+# Uncomment the following line to turn off the BGM enhancement function
+# $BGMtakeOver = false
 
-# The following lines modifies the hotkey to be Alt+F2
-MODIFIER = 1
-KEY = 113
-# Other examples
-# MODIFIER = 6; KEY = 90 # Ctrl+Shift+Z
-# MODIFIER = 0; KEY = 9 # Tab. This is dangerous and deprecated
-# And so on.
-# Cheat sheet 0=None, 1=Alt, 2=Ctrl, 4=Shift, 8=Win.
-# Virtual key codes httpsdocs.microsoft.comen-uswindowswin32inputdevvirtual-key-codes. A-Z is just their ASCII (65-90). F1-F12 is 112-123.
+# Uncomment the following line to specify the absolute path of the BGM mp3 files if this app fails to find it (Note: its length should not exceed 240 bytes)
+# $BGMpath = File.join(ENV['userprofile'], 'Downloads\BGM')
+# The following line indicates auto searching the BGM path. By default, this app looks into the current working directory and this app's own path and find if there is a folder named `BGM_DIRNAME` (see below)
+# $BGMpath = nil
+# The default BGM folder name is 'BGM'; modify the following line if you want to rename the folder
+# It can also be a hierarchical path, e.g., 'BGM/mp3', as long as it is a valid relative path with respect to the current directory (or app path; see above)
+# BGM_DIRNAME = 'mp3'
+
+# The following line makes this app always shown in Chinese language
+$isCHN = 1
+# Uncomment the following line to make this app always shown in English language
+# $isCHN = nil
+# Uncomment the following line to make tswSL auto decide which language to use according to which TSW is running
+# $isCHN = false
+
+# The following line modifies the Quit and Toggle on/off hotkeys to 'Alt+F3'
+# *Unlike other settings, this will be loaded only ONE-TIME upon initialization of this app and will NOT be updated every time you start a new TSW process*
+CON_MODIFIER = 1
+CON_HOTKEY = 114
+
+# If the game BGM is taken over by this app, the current BGM will fade out before the next BGM is played
+# By default, the BGM fades out in 10 steps, each spanning 150 ms
+# If you desire a finer or faster fading out effect, the number of steps and the interval between steps, respectively, can be tuned in the following lines
+BGM_FADE_STEPS = 20 # 1 means stop immediately (no fading)
+BGM_FADE_INTERVAL = 25 # in msec
+
+# Modifier 0=None, 1=Alt, 2=Ctrl, 4=Shift, 8=Win.
+# Virtual key code: https://docs.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes, e.g., A-Z is just their ASCII (65-90). F1-F12 is 112-123.
+
+# To successfully quit the program by holding the hotkey, you should make sure your keyboard repeat delay is longer than INTERVAL_REHOOK AND keyboard repeat rate is shorter than INTERVAL_QUIT. The default setting is good as long as you have not made changes to your system settings; otherwise, you should make changes accordingly to the following two lines
+# Note that INTERVAL_REHOOK should not be too small (typically >150 ms), because you need to quickly press the hotkey twice within INTERVAL_REHOOK to trigger the "rehook" function
+INTERVAL_REHOOK = 400
+INTERVAL_QUIT = 60
+
+# Set the interval for checking TSW status (in msec; default 500 ms)
+# For example, when TSW is not running, this app will check every `INTERVAL_TSW_RECHECK` msec if a new TSW instance has started up
+INTERVAL_TSW_RECHECK = 250
