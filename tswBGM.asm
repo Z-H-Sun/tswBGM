@@ -84,24 +84,32 @@ BASE:31188	TMediaPlayer.Close	proc near
 ;BASE:311AC		cmp byte ptr [esi+01E0], 0	; byte [TMediaPlayer+01E2] indicates whether to wait (MCI_WAIT)
 ;BASE:311B3		je BASE:311BF
 ;BASE:311B5		mov [esi+01DC], MCI_WAIT	; 2
-;BASE:30FBF		mov byte ptr [esi+01E2], 0
+;BASE:311BF		mov byte ptr [esi+01E2], 0
+;BASE:311C6		jmp BASE:311D2
 		; patched bytes:
 BASE:31188		mov edx, [eax+TControl.Parent]
-BASE:3118B		cmp esi, [eax+TTSW10.TMediaPlayer5]
-BASE:31191		jne BASE:311A8	; execute the following lines only if is TMediaPlayer5
+BASE:3118B		cmp eax, [eax+TTSW10.TMediaPlayer5]
+BASE:31191		jne BASE:311B5	; execute the following lines only if is TMediaPlayer5
+
 BASE:31193		mov eax, [edx+TTSW10.TTimer4]
 BASE:31199		mov dl, 06	; to differentiate this enabled state from TSW's intrinsic enabled state of TTimer4, set TTimer.Enabled to 6 rather than 1
 BASE:3119B		mov byte ptr [TSW_BGM_ID], FF	; this means to stop the current BGM
-BASE:311A2		call TTimer.SetEnabled
-BASE:311A7		ret
-BASE:311A8		cmp word ptr [eax+TMediaPlayer.DeviceID], 0
-BASE:311B0		je BASE:311A7	; return right away if the decide ID is not yet initialized
-BASE:311B2		push ebx
-BASE:311B3		push esi
-BASE:311B4		push ecx
-BASE:311B5		mov ebx, eax
-BASE:311B7		jmp BASE:311C8
-		; ...
+BASE:311A2		cmp byte ptr [isInProlog], 0	; in normal cases (`!isInProlog`), just begin fading out BGM by calling TTimer4.SetEnabled(false)
+BASE:311A9		je TTimer.SetEnabled
+		; otherwise, if `isInProlog`, need to stop the prolog and begin game right away; if not, because TTimer4 will be used for fading out, prolog will be on halt forever
+BASE:311AF		push ebx	; this is necessary for calling the snippet in `TTSW10.GameStart1Click`, because there will be a `pop ebx` before `ret`
+BASE:311B0		jmp BASE:6382A	; this is a snippet in `TTSW10.GameStart1Click`, which will call both `TTimer.SetEnabled` and `TTSW10.gameover` (despite the confusing name, the latter procedure actually restarts a game)
+
+BASE:311B5		cmp word ptr [eax+TMediaPlayer.DeviceID], 0
+BASE:311BD		jne BASE:311C0	; return right away if the decide ID is not yet initialized
+BASE:311BF		ret
+BASE:311C0		push ebx
+BASE:311C1		push esi
+BASE:311C2		push ecx
+BASE:311C3		mov ebx, eax
+BASE:311C5		nop
+BASE:311C6		nop
+BASE:311C7		nop
 BASE:311C8		mov byte ptr [ebx+01E2], MCI_WAIT	; no TMediaPlayer in TSW has other settings (should always wait for MCI_CLOSE)
 		; ...
 
@@ -679,7 +687,7 @@ BASE:82AD6		jb loc_350ms
 BASE:82AD8		sub eax, 7
 BASE:82ADB		jb loc_250ms
 BASE:82ADD		jmp loc_150ms
-BASE:82ACE	loc_250ms:
+BASE:82ADF	loc_250ms:
 			sub edx, 0064
 BASE:82AE2	loc_350ms:
 			nop
@@ -1051,8 +1059,8 @@ EXTRA:0DB6	loc_quit_tswBGM:
 EXTRA:0DBC		mov eax, [ebx+TTSW10.TMediaPlayer5]
 EXTRA:0DC2		call TMediaPlayer.Close
 EXTRA:0DC7		mov dl, [isInProlog]
-EXTRA:0DCD		mov eax, [ebx+TMediaPlayer5]
-EXTRA:0DD3		jmp TMediaPlayer.Close
+EXTRA:0DCD		mov eax, [ebx+TTimer4]
+EXTRA:0DD3		jmp TTimer.SetEnabled
 
 		sub_finalizeBGM	endp
 
