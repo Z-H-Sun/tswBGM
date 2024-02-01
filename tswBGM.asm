@@ -8,14 +8,18 @@ BASE:00000	TSW_BGM_setting	:= dword ptr BASE:089BA2
 		TSW_BGM_ID	:= dword ptr BASE:0B87F0
 		TSW_DataCheck1	:= dword ptr BASE:0B8918
 		TSW_DataCheck2	:= dword ptr BASE:0B891C
+		TSW_TempByte	:= dword ptr BASE:0BA13B	; technically, this byte indicates the location you will appear at when you go down to 50F, which is impossible because there is no "51F" in this tower. Therefore, this byte is used as a temp var here
 		TControl.Parent	:= dword ptr 0004	; dword
 		TTSW10.TTimer1	:= dword ptr 01B4
 		TTSW10.TTimer4	:= dword ptr 041C
 		TTimer.Enabled	:= dword ptr 0020	; byte
 		TTimer.Interval	:= dword ptr 0024	; dword
-		TTSW10.TMediaPlayer3	:= dword ptr 0464
-		TTSW10.TMediaPlayer5	:= dword ptr 02D8
-		TTSW10.TMediaPlayer6	:= dword ptr 046C
+		TTSW10.TMediaPlayer1	:= dword ptr 02D4	; for playing `open.wav` soundeffect
+		TTSW10.TMediaPlayer2	:= dword ptr 0460	; for playing `get.wav` soundeffect
+		TTSW10.TMediaPlayer3	:= dword ptr 0464	; for playing `taisen.wav` (battle) soundeffect
+		TTSW10.TMediaPlayer3	:= dword ptr 0468	; for playing `zeno.wav` (magic attack) soundeffect
+		TTSW10.TMediaPlayer5	:= dword ptr 02D8	; for playing BGM
+		TTSW10.TMediaPlayer6	:= dword ptr 046C	; for playing all other sound effects
 		TMediaPlayer.PlayState	:= dword ptr 01D5	; byte
 		TMediaPlayer.DeviceID	:= dword ptr 01E6	; word
 		TTSW10.TMenuBGMON1	:= dword ptr 0330
@@ -116,7 +120,8 @@ BASE:311C8		mov byte ptr [ebx+01E2], MCI_WAIT	; no TMediaPlayer in TSW has other
 		TMediaPlayer.Close	endp
 
 BASE:31250	TMediaPlayer.Play	proc near
-		; if is TMediaPlayer5, should set the correct flags
+		; bug fix: if the interval between two sound effects is too short, the second sound might not be played.
+		; if is TMediaPlayer5, should set the correct flags (endless repeat: MCI_DGV_PLAY_REPEAT)
 		; ...
 		; original bytes:
 ;BASE:312CB		cmp byte ptr [esi+01E2], 0	; byte [TMediaPlayer+01E2] indicates whether [TMediaPlayer+01E0] is assigned *for this time*; if not, set the flag to be the default value (for MCI_PLAY, the default is to unset MCI_WAIT (i.e. 0))
@@ -125,23 +130,57 @@ BASE:31250	TMediaPlayer.Play	proc near
 ;BASE:312DB		je BASE:312E4
 ;BASE:312DD		or [esi+01DC], MCI_WAIT	; 2
 ;BASE:312E4		mov byte ptr [esi+01E2], 0
-;BASE:312EB		; ...
+;BASE:312EB		cmp byte ptr [esi+01E4], 0	; byte [TMediaPlayer+01E4] indicates whether to play the music from a specific time point (one-time)
+;BASE:312F2		je BASE:3130C
+;BASE:312F4		or [esi+01DC], MCI_FROM	; 4
+;BASE:312FB		mov eax, [ebx+01F0]	; the starting time point
+;BASE:31301		mov [esp+4], eax	; DWORD dwFrom (in MCI_PLAY_PARMS)
+;BASE:31305		mov byte ptr [esi+01E4], 0
+
 		; patched bytes:
 BASE:312CB		mov eax, [ebx+TControl.Parent]
 BASE:312CE		cmp ebx, [eax+TTSW10.TMediaPlayer5]
-BASE:312D4		jne BASE:312E0	; execute the following lines only if is TMediaPlayer5
-BASE:312D6		or [esi+01DC], MCI_DGV_PLAY_REPEAT	; 0x10000 indicates the audio will be replayed once it reached the end
+BASE:312D4		je BASE:31313	; jump if is TMediaPlayer5. If tswBGM is disabled, nothing will happen; otherwise, MCI_DGV_PLAY_REPEAT flag will be set (see below)
+BASE:312D6		xor edx, edx
+BASE:312D8		mov [esp+4], edx	; DWORD dwFrom (in MCI_PLAY_PARMS)
+		; below, I will explain under what condition I will force the wave file to be played from the beginning to avoid missing sounds
+		; taisen.wav (battle): always
+		; get.wav, open.wav, zeno.wav (magic attack): in addition to their normal use, these sound effects will also be used in special events, such as 3F, 10F, 25F, and 50F. In these special events, I don't want to play the sound effects from the beginning every time; otherwise they will be way too quick and dense (like "da-da-da-da-da" without any pause); actually the original treatment is better, i.e. wait for the previous sound effect to finish before starting the next one.
+		; so I will set a threshold value, once the event count in [BASE:8C5AC] (pointer to the current event sequence, see elsewhere for its explanation) is greater than this value, it will be viewed as a special event, and then the file will not be played from the beginning (i.e. TSW's original treatment)
+BASE:312DC		add eax, TTSW10.TMediaPlayer3	; this one plays the "taisen" (battle) soundeffect
+BASE:312E1		cmp ebx, [eax]	; if is TMediaPlayer3
+BASE:312E3		je BASE:31304	; always play the soundeffect from the beginning; otherwise, there will be missing sounds if this sound has already been playing
+BASE:312E5		cmp ebx, [eax-4]	; if is TMediaPlayer2 (TTSW10.TMediaPlayer2=0x460=TTSW10.TMediaPlayer3-4)
+BASE:312E8		mov dl, 4	; here, `dl` will be the maximum event count mentioned above
+BASE:312EA		je BASE:312EE	; for get.wav, it will be viewed as a special event if [BASE:8C5AC] > 4
+BASE:312EA		mov dl, 0040	; otherwise, it will be viewed as a special event if [BASE:8C5AC] > 0x40
+BASE:312EE		mov eax, offset TSW_TempByte	; this temp byte will be used to indicate whether [BASE:8C5AC] have been greater than the threshold value *before*; if so, it is now still in a special event
+BASE:312F3		mov cl, [eax]
+BASE:312F5		cmp [BASE:8C5AC], edx	; whether the *current* event count is greater than the threshold
+BASE:312FB		setg byte ptr [eax]	; the current status will be stored in the temp var
+BASE:312FE		jg BASE:3130C	; do nothing if the *current* event count is greater than the threshold
+BASE:31300		test cl, cl
+BASE:31302		jne BASE:3130C	; do nothing if the *past* event count is greater than the threshold
+BASE:31304		or [ebx+01DC], MCI_FROM	; 4
+BASE:3130B		nop
+
+		; original bytes:
+;BASE:3130C		cmp byte ptr [esi+01E5], 0	; byte [TMediaPlayer+01E5] indicates whether to play the music to a specific time point and stop (one-time) (this property is never used in TSW, so it can be replaced by our own codes without any risk)
+;BASE:31313		je BASE:3130C	; if tswBGM is disabled, and the current media player is TMediaPlayer5, the EIP will jump to here from BASE:312D4; because ZF=1 which meets `je` condition, so here it will jump too
+;BASE:31315		or [esi+01DC], MCI_TO	; 8
+;BASE:3131C		mov eax, [ebx+01F0]	; the starting time point
+;BASE:31322		mov [esp+8], eax	; DWORD dwTo (in MCI_PLAY_PARMS)
+;BASE:31326		mov byte ptr [esi+01E5], 0
+		; ...
+
+		; patched bytes:
+BASE:3130C		cmp byte ptr [esi+01E5], 1	; we need to change the condition a bit here: original bytes test whether `[esi+01E5]==0`; here we change it to `[esi+01E5]!=1` which is identical
+BASE:31313		jne BASE:3132D	; if tswBGM is enabled, and the current media player is TMediaPlayer5, the EIP will jump to here from BASE:312D4; because ZF=1 which does not meet `jne` condition, so here it will not jump
+		; as a result, the following line will only be executed when the current meida player is TMediaPlayer5 (note that no player in TSW uses the [TMediaPlayer+01E5] property)
+BASE:31315	or [esi+01DC], MCI_DGV_PLAY_REPEAT	; 0x10000 indicates the audio will be replayed once it reached the end
 		; this flag is not useful to WAV or MIDI, so TSW has to set MCI_NOTIFY and manually replay the MIDI on notification of end of play
 		; fortunately for MP3, this flag can be set to make our lives much easier
-BASE:312E0		cmp ebx, [eax+TTSW10.TMediaPlayer3]	; this one plays the "taisen" (battle) soundeffect
-BASE:312E6		je BASE:312F4	; always play the soundeffect from the beginning; otherwise, there will be missing sounds if this sound has already been playing
-BASE:312E8		nop
-BASE:312E9		nop
-BASE:312EA		nop
-
-BASE:312EB		cmp byte ptr [esi+01E4], 0	; this flag indicates whether to specify the starting time of the audio
-BASE:312F2		je BASE:3130C
-BASE:312F4		or [ebx+01DC], MCI_FROM	; 4
+BASE:3131F	jmp BASE:3132D
 		; ...
 
 		TMediaPlayer.Play	endp
